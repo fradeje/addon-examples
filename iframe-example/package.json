@@ -22,7 +22,8 @@
     "cli-color": "^2.0.3",
     "express": "^4.18.2",
     "ngrok": "5.0.0-beta.2",
-    "nodemon": "^2.0.20"
+    "nodemon": "^2.0.20",
+    "pdfkit": "^0.17.2"
   },
   "devDependencies": {
     "prettier": "3.0.3"

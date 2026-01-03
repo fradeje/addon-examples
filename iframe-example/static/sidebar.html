@@ -1,62 +1,359 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Iframe example</title>
+    <title>Contractor Invoice Generator</title>
     <style>
-        html, body, iframe {
-            height: 100%;
+        :root {
+            --border: #e6e6e6;
+            --muted: #6b7280;
         }
+
         body {
             margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+            background: #fff;
         }
-        iframe {
-            border: 0;
+
+        .wrap {
+            padding: 16px;
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            max-width: 560px;
+        }
+
+        h2 {
+            margin: 0 0 6px;
+            font-size: 20px;
+        }
+
+        p {
+            margin: 0 0 12px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        label {
+            display: block;
+            margin-top: 12px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        input,
+        button,
+        select {
             width: 100%;
+            padding: 10px;
+            margin-top: 6px;
+            box-sizing: border-box;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        button {
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .row>div {
+            flex: 1;
+        }
+
+        .hint {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        pre {
+            margin-top: 12px;
+            background: #f7f7f7;
+            padding: 12px;
+            border-radius: 10px;
+            overflow: auto;
+            font-size: 12px;
+        }
+
+        .ok {
+            color: #0a7;
+            font-weight: 700;
+        }
+
+        .bad {
+            color: #c00;
+            font-weight: 700;
         }
     </style>
 </head>
 
 <body>
-   <iframe></iframe>
+    <div class="wrap">
+        <div class="card">
+            <h2>Contractor Invoice Generator</h2>
+            <p>MVP: generate a monthly invoice from <b>approved</b> + <b>billable</b> Clockify time.</p>
+
+            <div class="row">
+                <div>
+                    <label for="month">Invoice month</label>
+                    <input id="month" type="month" />
+                </div>
+                <div>
+                    <label for="format">Output</label>
+                    <select id="format">
+                        <option value="preview">Preview (JSON)</option>
+                        <option value="pdf">PDF</option>
+                    </select>
+                </div>
+            </div>
+
+            <button id="btn">Generate preview</button>
+
+            <div class="hint">
+                Status: <span id="status" class="bad">Not connected yet</span><br />
+                Next: we’ll call Clockify Reports API and compute totals.
+            </div>
+
+            <pre id="dbg">(debug)</pre>
+        </div>
+    </div>
+
     <script>
-        try {
-            let url = document.documentURI
-            let parsedURL = new URL(url);
+        (async () => {
+            // ---------- helpers ----------
+            function monthRangeUTC(ym) {
+                const [y, m] = ym.split('-').map(Number);
+                const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
+                const end = new Date(Date.UTC(y, m, 0, 23, 59, 59)); // last day of month
+                return { start: start.toISOString(), end: end.toISOString() };
+            }
 
-            // Get auth token from url
-            let token = parsedURL.searchParams.get('auth_token');
+            function secondsToHours(seconds) {
+                return Math.round((Number(seconds || 0) / 3600) * 100) / 100;
+            }
 
-            // Decode JWT token and get workspaceId
-            let jwtContent = JSON.parse(atob(token.split('.')[1]))
-            let workspaceId = jwtContent.workspaceId
-            let backendUrl = jwtContent.backendUrl
+            function centsToMoney(cents) {
+                return (Number(cents || 0) / 100).toFixed(2);
+            }
 
-            console.log({ jwtContent })
+            function pickTotalsFromSummaryResponse(data) {
+                // Clockify summary sometimes returns totals in different places.
+                // In your response, totals were inside data.groupOne[0].
+                if (Array.isArray(data?.groupOne) && data.groupOne.length > 0) return data.groupOne[0];
+                if (Array.isArray(data?.groupTwo) && data.groupTwo.length > 0) return data.groupTwo[0];
+                if (Array.isArray(data?.totals) && data.totals.length > 0) return data.totals[0];
+                if (data?.totals && typeof data.totals === "object") return data.totals;
+                if (data?.total && typeof data.total === "object") return data.total;
+                return null;
+            }
 
-            // Get settings values from the extension
-            let endpoint = `${backendUrl}/addon/workspaces/${workspaceId}/settings`;
-            fetch(endpoint, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Addon-Token': token
+            async function fetchApprovedBillableReport({ reportsUrl, workspaceId, userId, token, ym }) {
+                const { start, end } = monthRangeUTC(ym);
+
+                const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
+
+                const body = {
+                    dateRangeStart: start,
+                    dateRangeEnd: end,
+                    users: { ids: [userId] },
+                    billable: true,
+                    approvalState: "APPROVED",
+                    summaryFilter: { groups: ["USER"] }
+                };
+
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Addon-Token": token
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                if (!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`Reports API failed ${res.status}: ${txt}`);
                 }
-            }).then(response => {
-                response.json().then(rs => {
 
-                    // Get the URL setting
-                    const urlValue = rs.tabs[0].settings[0].value
+                return res.json();
+            }
 
-                    // Update the iframe with the url from the settings page
-                    const iframeDocument = document.querySelector('iframe')
-                    iframeDocument.src = urlValue;
-                })
+            // ---------- init ----------
+            const d = new Date();
+            d.setMonth(d.getMonth() - 1);
+            document.getElementById("month").value = d.toISOString().slice(0, 7);
+
+            const parsedURL = new URL(document.location.href);
+            const token = parsedURL.searchParams.get("auth_token");
+
+            const dbg = document.getElementById("dbg");
+            const statusEl = document.getElementById("status");
+
+            if (!token) {
+                statusEl.textContent = "Missing auth_token (open inside Clockify)";
+                statusEl.className = "bad";
+                dbg.textContent = "Query params: " + parsedURL.searchParams.toString();
+                return;
+            }
+
+            statusEl.textContent = "Loaded inside Clockify ✅";
+            statusEl.className = "ok";
+
+            const jwtContent = JSON.parse(atob(token.split(".")[1]));
+
+            // IMPORTANT: do NOT call /v1/user. We already have the user id.
+            const userId = parsedURL.searchParams.get("userId") || jwtContent.user;
+            const workspaceId = jwtContent.workspaceId;
+            const reportsUrl = jwtContent.reportsUrl;
+            const backendUrl = jwtContent.backendUrl;
+
+            dbg.textContent = JSON.stringify(
+                {
+                    workspaceId,
+                    backendUrl,
+                    reportsUrl,
+                    userId,
+                    note: "Using userId from query/jwt; Reports API uses REPORTS_READ."
+                },
+                null,
+                2
+            );
+
+            // ---------- click ----------
+            document.getElementById("btn").addEventListener("click", async () => {
+                const ym = document.getElementById("month").value;
+
+                const format = document.getElementById("format").value;
+
+                if (format === "pdf") {
+                    statusEl.textContent = "Generating PDF…";
+                    statusEl.className = "";
+
+                    const res = await fetch(`/invoice.pdf?month=${encodeURIComponent(ym)}`, {
+                        headers: { "X-Addon-Token": token }
+                    });
+
+                    if (!res.ok) {
+                        const txt = await res.text();
+                        throw new Error(`PDF failed ${res.status}: ${txt}`);
+                    }
+
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+
+                    // trigger download
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `invoice-${ym}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+
+                    statusEl.textContent = "PDF downloaded ✅";
+                    statusEl.className = "ok";
+                    return;
+                }
+
+                try {
+                    statusEl.textContent = "Loading…";
+                    statusEl.className = "";
+
+                    const data = await fetchApprovedBillableReport({
+                        reportsUrl,
+                        workspaceId,
+                        userId,
+                        token,
+                        ym
+                    });
+
+                    const totals = pickTotalsFromSummaryResponse(data);
+
+                    if (!totals) {
+                        statusEl.textContent = "No data";
+                        statusEl.className = "bad";
+                        dbg.textContent = JSON.stringify({ month: ym, message: "No totals found in response", raw: data }, null, 2);
+                        return;
+                    }
+
+                    // In your example:
+                    // totals.totalBillableTime = 86400 (seconds) => 24 hours
+                    // totals.totalAmountByCurrency[0].amount = 2400 (cents) => $24.00
+                    // duration is seconds in this response shape
+                    const billableSeconds =
+                        totals.totalBillableTime ??
+                        totals.billableTime ??
+                        totals.totalTime ??
+                        totals.duration ??
+                        0;
+
+                    // try to find currency + cents from either totalAmountByCurrency or amounts[].amountByCurrency
+                    let currency = null;
+                    let amountCents = null;
+
+                    // shape A
+                    if (Array.isArray(totals.totalAmountByCurrency) && totals.totalAmountByCurrency.length) {
+                        currency = totals.totalAmountByCurrency[0]?.currency ?? null;
+                        amountCents = totals.totalAmountByCurrency[0]?.amount ?? null;
+                    }
+
+                    // shape B (your current output)
+                    if ((currency == null || amountCents == null) && Array.isArray(totals.amounts) && totals.amounts.length) {
+                        const byCur = totals.amounts[0]?.amountByCurrency;
+                        if (Array.isArray(byCur) && byCur.length) {
+                            currency = byCur[0]?.currency ?? currency;
+                            amountCents = byCur[0]?.amount ?? amountCents;
+                        }
+                    }
+
+                    // fallback: some responses include amount only (cents) without currency
+                    if (amountCents == null && totals.amount != null) {
+                        amountCents = totals.amount;
+                    }
+
+                    const billableHours = secondsToHours(billableSeconds);
+
+                    let billableAmount = "(not provided)";
+                    if (amountCents != null) {
+                        billableAmount = currency ? `${currency} ${centsToMoney(amountCents)}` : centsToMoney(amountCents);
+                    }
+
+                    statusEl.textContent = "Preview ready ✅";
+                    statusEl.className = "ok";
+
+                    dbg.textContent = JSON.stringify(
+                        {
+                            month: ym,
+                            billableHours,
+                            billableAmount,
+                            entriesCount: totals.entriesCount,
+                            rawTotals: totals
+                        },
+                        null,
+                        2
+                    );
+                } catch (e) {
+                    statusEl.textContent = "Error";
+                    statusEl.className = "bad";
+                    dbg.textContent = String(e);
+                    console.error(e);
+                }
             });
-        } catch(e) {
-            console.error(e)
-        }
+        })();
     </script>
 </body>
+
 </html>

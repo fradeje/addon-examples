@@ -4,427 +4,474 @@ const path = require("path");
 
 // ----------------- helpers -----------------
 function decodeJwtPayload(token) {
-  const payload = token.split(".")[1];
-  const json = Buffer.from(payload, "base64").toString("utf8");
-  return JSON.parse(json);
+    const payload = token.split(".")[1];
+    const json = Buffer.from(payload, "base64").toString("utf8");
+    return JSON.parse(json);
 }
 
 function monthRangeUTC(ym) {
-  const [y, m] = ym.split("-").map(Number);
-  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0)).toISOString();
-  const end = new Date(Date.UTC(y, m, 0, 23, 59, 59)).toISOString(); // last day
-  return { start, end };
+    const [y, m] = ym.split("-").map(Number);
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0)).toISOString();
+    const end = new Date(Date.UTC(y, m, 0, 23, 59, 59)).toISOString(); // last day
+    return { start, end };
 }
 
 function monthLabel(ym) {
-  const [y, m] = ym.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1, 1));
-  return d.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    return d.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function secondsToHours(seconds) {
-  return Math.round((Number(seconds || 0) / 3600) * 100) / 100;
+    return Math.round((Number(seconds || 0) / 3600) * 100) / 100;
 }
 
 function centsToMoney(cents) {
-  return (Number(cents || 0) / 100).toFixed(2);
+    return (Number(cents || 0) / 100).toFixed(2);
 }
 
 function moneyCentsFrom(hours, rate) {
-  return Math.round(Number(hours || 0) * Number(rate || 0) * 100);
+    return Math.round(Number(hours || 0) * Number(rate || 0) * 100);
 }
 
 function pickTotalsFromSummaryResponse(data) {
-  if (Array.isArray(data?.groupOne) && data.groupOne.length) return data.groupOne[0];
-  if (Array.isArray(data?.totals) && data.totals.length) return data.totals[0];
-  if (data?.totals && typeof data.totals === "object") return data.totals;
-  if (data?.total && typeof data.total === "object") return data.total;
-  return null;
+    if (Array.isArray(data?.groupOne) && data.groupOne.length) return data.groupOne[0];
+    if (Array.isArray(data?.totals) && data.totals.length) return data.totals[0];
+    if (data?.totals && typeof data.totals === "object") return data.totals;
+    if (data?.total && typeof data.total === "object") return data.total;
+    return null;
 }
 
 async function fetchApprovedBillableSeconds({ reportsUrl, workspaceId, userId, token, ym }) {
-  const { start, end } = monthRangeUTC(ym);
-  const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
+    const { start, end } = monthRangeUTC(ym);
+    const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
 
-  const body = {
-    dateRangeStart: start,
-    dateRangeEnd: end,
-    users: { ids: [userId] },
-    billable: true,
-    approvalState: "APPROVED",
-    summaryFilter: { groups: ["USER"] },
-  };
+    const body = {
+        dateRangeStart: start,
+        dateRangeEnd: end,
+        users: { ids: [userId] },
+        billable: true,
+        approvalState: "APPROVED",
+        summaryFilter: { groups: ["USER"] },
+    };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Addon-Token": token },
-    body: JSON.stringify(body),
-  });
+    const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Addon-Token": token },
+        body: JSON.stringify(body),
+    });
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Reports API failed ${res.status}: ${txt}`);
-  }
+    if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Reports API failed ${res.status}: ${txt}`);
+    }
 
-  const data = await res.json();
-  const totals = pickTotalsFromSummaryResponse(data);
-  if (!totals) return { seconds: 0, entriesCount: 0, raw: data };
+    const data = await res.json();
+    const totals = pickTotalsFromSummaryResponse(data);
+    if (!totals) return { seconds: 0, entriesCount: 0, raw: data };
 
-  const seconds =
-    totals.totalBillableTime ??
-    totals.billableTime ??
-    totals.totalTime ??
-    totals.duration ??
-    0;
+    const seconds =
+        totals.totalBillableTime ??
+        totals.billableTime ??
+        totals.totalTime ??
+        totals.duration ??
+        0;
 
-  return { seconds: Number(seconds || 0), entriesCount: totals.entriesCount ?? null, rawTotals: totals };
+    return { seconds: Number(seconds || 0), entriesCount: totals.entriesCount ?? null, rawTotals: totals };
 }
 
-// ----------------- NEW: fetch Clockify hourly rate (server-side) -----------------
-async function fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token }) {
-  if (!backendUrl) throw new Error("Missing backendUrl in token");
+// ----------------- ECB FX (USD -> EUR) -----------------
+async function fetchEcbUsdToEur() {
+    // ECB daily reference rates: base = EUR, includes USD as USD per 1 EUR.
+    // We need EUR per 1 USD = 1 / (USD per EUR).
+    const url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml";
 
-  const base = String(backendUrl).replace(/\/+$/, "");
-  const url = `${base}/v1/workspaces/${workspaceId}/users?memberships=WORKSPACE`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`ECB FX fetch failed ${res.status}: ${await res.text()}`);
 
-  const res = await fetch(url, {
-    method: "GET",
-    headers: { "X-Addon-Token": token },
-  });
+    const xml = await res.text();
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Clockify users API failed ${res.status}: ${txt}`);
-  }
+    // Extract date
+    const timeMatch = xml.match(/time=['"](\d{4}-\d{2}-\d{2})['"]/);
+    const fxDate = timeMatch ? timeMatch[1] : null;
 
-  const users = await res.json();
-  if (!Array.isArray(users)) return null;
+    // Extract USD per EUR
+    // Example: <Cube currency='USD' rate='1.1234'/>
+    const usdMatch = xml.match(/currency=['"]USD['"]\s+rate=['"]([0-9.]+)['"]/);
+    if (!usdMatch) throw new Error("ECB FX parse failed: USD rate not found");
 
-  const u = users.find((x) => String(x?.id) === String(userId));
-  if (!u) return null;
+    const usdPerEur = Number(usdMatch[1]);
+    if (!Number.isFinite(usdPerEur) || usdPerEur <= 0) throw new Error("ECB FX parse failed: invalid USD rate");
 
-  const memberships = Array.isArray(u.memberships) ? u.memberships : [];
-  const m =
-    memberships.find((mm) => mm?.membershipType === "WORKSPACE") ||
-    memberships.find((mm) => mm?.membershipType) ||
-    null;
+    const eurPerUsd = 1 / usdPerEur;
 
-  const hr = m?.hourlyRate || u?.hourlyRate || null;
-  const amountCents = Number(hr?.amount);
-
-  if (!Number.isFinite(amountCents)) return null;
-
-  return {
-    rate: Math.round((amountCents / 100) * 100) / 100, // 2 decimals
-    currency: (hr?.currency || "").toUpperCase() || null,
-    amountCents,
-  };
+    return { eurPerUsd, fxDate };
 }
 
 // ---------- vendor profile store (file-based) ----------
 function profilesDir() {
-  return path.join(process.cwd(), "data", "vendorProfiles");
+    return path.join(process.cwd(), "data", "vendorProfiles");
 }
 
 function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 
 function profilePath(userId) {
-  ensureDir(profilesDir());
-  return path.join(profilesDir(), `${userId}.json`);
+    ensureDir(profilesDir());
+    return path.join(profilesDir(), `${userId}.json`);
 }
 
 function readProfile(userId) {
-  const fp = profilePath(userId);
-  if (!fs.existsSync(fp)) return {};
-  return JSON.parse(fs.readFileSync(fp, "utf8"));
+    const fp = profilePath(userId);
+    if (!fs.existsSync(fp)) return {};
+    return JSON.parse(fs.readFileSync(fp, "utf8"));
 }
 
 function writeProfile(userId, profile) {
-  const fp = profilePath(userId);
-  fs.writeFileSync(fp, JSON.stringify(profile, null, 2), "utf8");
+    const fp = profilePath(userId);
+    fs.writeFileSync(fp, JSON.stringify(profile, null, 2), "utf8");
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
 }
 
 // ---------- PDF layout helpers ----------
 function drawHr(doc, x, y, w) {
-  doc.moveTo(x, y).lineTo(x + w, y).strokeColor("#e6e6e6").lineWidth(1).stroke();
+    doc.moveTo(x, y).lineTo(x + w, y).strokeColor("#e6e6e6").lineWidth(1).stroke();
 }
 
 function drawTableHeader(doc, x, y, cols, rowH) {
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#111");
-  cols.forEach((c) => {
-    doc.text(c.label, c.x, y + 6, { width: c.w, align: c.align || "left" });
-  });
-  doc.font("Helvetica");
-  drawHr(doc, x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#111");
+    cols.forEach((c) => {
+        doc.text(c.label, c.x, y + 6, { width: c.w, align: c.align || "left" });
+    });
+    doc.font("Helvetica");
+    drawHr(doc, x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
 }
 
 function drawTableRow(doc, y, cols, row, rowH) {
-  doc.fontSize(10).fillColor("#111");
-  cols.forEach((c) => {
-    const text = row[c.key] ?? "";
-    doc.text(String(text), c.x, y + 6, { width: c.w, align: c.align || "left" });
-  });
-  drawHr(doc, cols[0].x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
+    doc.fontSize(10).fillColor("#111");
+    cols.forEach((c) => {
+        const text = row[c.key] ?? "";
+        doc.text(String(text), c.x, y + 6, { width: c.w, align: c.align || "left" });
+    });
+    drawHr(doc, cols[0].x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
 }
 
 function drawWrappedLines(doc, x, y, width, lines, lineGap = 2) {
-  lines.forEach((t) => {
-    doc.text(t, x, y, { width });
-    const h = doc.heightOfString(t, { width });
-    y += h + lineGap;
-  });
-  return y;
+    lines.forEach((t) => {
+        doc.text(t, x, y, { width });
+        const h = doc.heightOfString(t, { width });
+        y += h + lineGap;
+    });
+    return y;
+}
+
+function drawTextBox(doc, left, pageW, y, title, text) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(title, left, y);
+    y += 10;
+
+    const boxPadding = 10;
+    const boxWidth = pageW;
+    const textWidth = boxWidth - boxPadding * 2;
+
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+    const textHeight = doc.heightOfString(text, { width: textWidth });
+    const boxHeight = Math.max(60, textHeight + boxPadding * 2);
+
+    const bottomLimit = doc.page.height - doc.page.margins.bottom - 80;
+    if (y + boxHeight > bottomLimit) {
+        doc.addPage();
+        y = doc.page.margins.top;
+    }
+
+    doc
+        .roundedRect(left, y, boxWidth, boxHeight, 6)
+        .strokeColor("#e6e6e6")
+        .lineWidth(1)
+        .stroke();
+
+    doc.text(text, left + boxPadding, y + boxPadding, { width: textWidth });
+    y += boxHeight;
+
+    return y;
 }
 
 // ----------------- endpoint -----------------
 module.exports.registerInvoicePdfEndpoint = function registerInvoicePdfEndpoint(app) {
-  app.get("/invoice.pdf", async (req, res) => {
-    let userId = null;
-    let usedCounter = null;
+    app.get("/invoice.pdf", async (req, res) => {
+        let userId = null;
+        let usedCounter = null;
 
-    try {
-      const ym = req.query.month; // "YYYY-MM"
-      if (!ym || !/^\d{4}-\d{2}$/.test(ym)) {
-        return res.status(400).send("Missing or invalid month. Use ?month=YYYY-MM");
-      }
-
-      const token = req.header("X-Addon-Token") || req.query.auth_token;
-      if (!token) return res.status(401).send("Missing X-Addon-Token");
-
-      const jwt = decodeJwtPayload(token);
-      const workspaceId = jwt.workspaceId;
-      userId = jwt.user || req.query.userId;
-      const reportsUrl = jwt.reportsUrl;
-      const backendUrl = jwt.backendUrl; // ✅ we need this for server-side rate
-
-      if (!workspaceId || !userId || !reportsUrl) {
-        return res.status(400).send("Token missing workspaceId/user/reportsUrl");
-      }
-
-      // Load vendor profile
-      const profile = readProfile(userId);
-
-      const prefix = (profile.invoicePrefix || "INV").trim() || "INV";
-
-      // ✅ canonical counter field (with legacy fallback)
-      let nextCounter =
-        profile.nextInvoiceCounter ??
-        profile.nextInvoiceNumber ?? // legacy name
-        1;
-
-      nextCounter = Number(nextCounter);
-      if (!Number.isFinite(nextCounter) || nextCounter < 1) nextCounter = 1;
-
-      usedCounter = nextCounter;
-      const invoiceNumber = `${prefix}-${nextCounter}`;
-
-      // Currency stays from Settings (no FX conversion)
-      const currency = (profile.currency || "USD").toUpperCase();
-      const irpfPercent = Number(profile.irpfPercent || 0);
-
-      // ✅ RATE: fetch from Clockify server-side, fallback to profile.rate only if needed
-      let rate = 0;
-      try {
-        const clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
-        if (clockifyRate?.rate != null) rate = Number(clockifyRate.rate);
-      } catch (e) {
-        console.warn("Clockify rate fetch failed (fallback to profile.rate):", e);
-      }
-      if (!Number.isFinite(rate) || rate <= 0) {
-        rate = Number(profile.rate || 0);
-      }
-
-      // Fetch approved+billable seconds
-      const report = await fetchApprovedBillableSeconds({ reportsUrl, workspaceId, userId, token, ym });
-      const hours = secondsToHours(report.seconds);
-
-      // Amount computed from enforced rate
-      const subtotalCents = moneyCentsFrom(hours, rate);
-      const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
-      const totalDueCents = subtotalCents - irpfCents;
-
-      // ---- PDF headers ----
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoiceNumber}.pdf"`);
-
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
-      doc.pipe(res);
-
-      const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      const left = doc.page.margins.left;
-
-      // Header
-      doc.font("Helvetica-Bold").fontSize(22).text("INVOICE", left, 40, { width: pageW, align: "right" });
-      doc.font("Helvetica-Bold").fontSize(14).text(invoiceNumber, left, 66, { width: pageW, align: "right" });
-
-      // Dates / period
-      const today = todayISO();
-      const periodLabel = monthLabel(ym);
-
-      doc.font("Helvetica").fontSize(10).fillColor("#111");
-      doc.text(`Invoice date: ${today}`, left, 95);
-      doc.text(`Issue date: ${today}`, left, 110);
-      doc.text(`Invoice period: ${periodLabel}`, left, 125);
-
-      // Bill From / Bill To blocks
-      const yBlocks = 155;
-      const colGap = 24;
-      const half = (pageW - colGap) / 2;
-
-      // Bill From
-      doc.font("Helvetica-Bold").fontSize(11).text("Bill From", left, yBlocks);
-      doc.font("Helvetica").fontSize(10);
-
-      const fromLines = [
-        profile.name || "Contractor",
-        profile.taxId ? `Tax ID: ${profile.taxId}` : null,
-        profile.address || null,
-        profile.email || null,
-      ].filter(Boolean);
-
-      let yFrom = yBlocks + 16;
-      yFrom = drawWrappedLines(doc, left, yFrom, half, fromLines);
-
-      // Bill To
-      const xTo = left + half + colGap;
-      doc.font("Helvetica-Bold").fontSize(11).text("Bill To", xTo, yBlocks);
-      doc.font("Helvetica").fontSize(10);
-
-      const toLines = [
-        "SPAINLINK DEVELOPMENT SOLUTIONS S.L.",
-        "VAT/CIF: B55470280",
-        "Avenida Luis Celso Garcia Guadalupe 3 Bloque 2 Portal A Bajo A, 38111, Santa Cruz de Tenerife, España.",
-        "spainlink@spainlink.es",
-      ];
-
-      let yTo = yBlocks + 16;
-      yTo = drawWrappedLines(doc, xTo, yTo, half, toLines);
-
-      // Line items
-      let y = Math.max(yFrom, yTo) + 18;
-      doc.font("Helvetica-Bold").fontSize(12).text("Line items", left, y);
-      y += 10;
-      drawHr(doc, left, y + 6, pageW);
-      y += 14;
-
-      // Table
-      const cols = (() => {
-        const wDesc = Math.round(pageW * 0.55);
-        const wHours = Math.round(pageW * 0.15);
-        const wRate = Math.round(pageW * 0.15);
-        const wAmt = pageW - wDesc - wHours - wRate;
-
-        return [
-          { key: "desc", label: "Description", x: left, w: wDesc, align: "left" },
-          { key: "hours", label: "Hours", x: left + wDesc, w: wHours, align: "right" },
-          { key: "rate", label: "Rate", x: left + wDesc + wHours, w: wRate, align: "right" },
-          { key: "amount", label: "Amount", x: left + wDesc + wHours + wRate, w: wAmt, align: "right" },
-        ];
-      })();
-
-      const rowH = 26;
-      drawTableHeader(doc, left, y, cols, rowH);
-      y += rowH;
-
-      const row = {
-        desc: `Professional services — ${periodLabel} (approved, billable time)`,
-        hours: hours.toFixed(2),
-        rate: `${currency} ${Number(rate || 0).toFixed(2)}`,
-        amount: `${currency} ${centsToMoney(subtotalCents)}`,
-      };
-
-      drawTableRow(doc, y, cols, row, rowH);
-      y += rowH + 14;
-
-      // Totals (right aligned)
-      const totalsX = left + Math.round(pageW * 0.55);
-      const totalsW = pageW - (totalsX - left);
-
-      doc.font("Helvetica").fontSize(10).fillColor("#111");
-      doc.text("Subtotal", totalsX, y, { width: totalsW * 0.5, align: "left" });
-      doc.text(`${currency} ${centsToMoney(subtotalCents)}`, totalsX, y, { width: totalsW, align: "right" });
-      y += 16;
-
-      if (irpfPercent > 0) {
-        doc.text(`IRPF (${irpfPercent.toFixed(2)}%)`, totalsX, y, { width: totalsW * 0.5, align: "left" });
-        doc.text(`- ${currency} ${centsToMoney(irpfCents)}`, totalsX, y, { width: totalsW, align: "right" });
-        y += 16;
-      }
-
-      doc.font("Helvetica-Bold").fontSize(12);
-      doc.text("Total due", totalsX, y, { width: totalsW * 0.5, align: "left" });
-      doc.text(`${currency} ${centsToMoney(totalDueCents)}`, totalsX, y, { width: totalsW, align: "right" });
-
-      // Payment details
-      const paymentDetails = String(profile.paymentDetails || "").trim();
-      if (paymentDetails) {
-        y += 22;
-        doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Payment details", left, y);
-        y += 10;
-
-        const boxPadding = 10;
-        const boxWidth = pageW;
-        const textWidth = boxWidth - boxPadding * 2;
-
-        doc.font("Helvetica").fontSize(10).fillColor("#111");
-
-        const textHeight = doc.heightOfString(paymentDetails, { width: textWidth });
-        const boxHeight = Math.max(60, textHeight + boxPadding * 2);
-
-        const bottomLimit = doc.page.height - doc.page.margins.bottom - 80;
-        if (y + boxHeight > bottomLimit) {
-          doc.addPage();
-          y = doc.page.margins.top;
-        }
-
-        doc
-          .roundedRect(left, y, boxWidth, boxHeight, 6)
-          .strokeColor("#e6e6e6")
-          .lineWidth(1)
-          .stroke();
-
-        doc.text(paymentDetails, left + boxPadding, y + boxPadding, { width: textWidth });
-        y += boxHeight;
-      }
-
-      // Footer
-      doc.font("Helvetica").fontSize(9).fillColor("#444");
-      doc.text(
-        "Generated from approved + billable Clockify time. Please keep this invoice for your records.",
-        left,
-        doc.page.height - 70,
-        { width: pageW }
-      );
-
-      // ✅ IMPORTANT:
-      // Only bump the counter AFTER the PDF stream is successfully finished.
-      res.on("finish", () => {
         try {
-          const p = readProfile(userId);
+            const ym = req.query.month; // "YYYY-MM"
+            if (!ym || !/^\d{4}-\d{2}$/.test(ym)) {
+                return res.status(400).send("Missing or invalid month. Use ?month=YYYY-MM");
+            }
 
-          let currentCounter = Number(p.nextInvoiceCounter ?? p.nextInvoiceNumber ?? 1);
-          if (!Number.isFinite(currentCounter) || currentCounter < 1) currentCounter = 1;
+            const token = req.header("X-Addon-Token") || req.query.auth_token;
+            if (!token) return res.status(401).send("Missing X-Addon-Token");
 
-          if (usedCounter != null && currentCounter === usedCounter) {
-            p.nextInvoiceCounter = currentCounter + 1;
-            delete p.nextInvoiceNumber; // cleanup legacy
-            writeProfile(userId, p);
-          }
-        } catch (err) {
-          console.error("Failed to bump invoice counter:", err);
+            const jwt = decodeJwtPayload(token);
+            const workspaceId = jwt.workspaceId;
+            userId = jwt.user || req.query.userId;
+            const reportsUrl = jwt.reportsUrl;
+
+            if (!workspaceId || !userId || !reportsUrl) {
+                return res.status(400).send("Token missing workspaceId/user/reportsUrl");
+            }
+
+            // Load vendor profile
+            const profile = readProfile(userId);
+
+            const prefix = (profile.invoicePrefix || "INV").trim() || "INV";
+
+            // canonical counter field (with legacy fallback)
+            let nextCounter =
+                profile.nextInvoiceCounter ??
+                profile.nextInvoiceNumber ?? // legacy
+                1;
+
+            nextCounter = Number(nextCounter);
+            if (!Number.isFinite(nextCounter) || nextCounter < 1) nextCounter = 1;
+
+            usedCounter = nextCounter;
+            const invoiceNumber = `${prefix}-${nextCounter}`;
+
+            // Base rate in USD (your UI shows "USD X.00 × FX = EUR ...")
+            const rateUsd = Number(profile.rate || 0);
+            const selectedCurrency = String(profile.currency || "USD").toUpperCase();
+            const irpfPercent = Number(profile.irpfPercent || 0);
+            const vatPercent = Number(profile.vatPercent || 0);
+
+            // Fetch approved+billable seconds
+            const report = await fetchApprovedBillableSeconds({ reportsUrl, workspaceId, userId, token, ym });
+            const hours = secondsToHours(report.seconds);
+
+            // Decide invoice currency + rate
+            let currency = "USD";
+            let rateToUse = rateUsd;
+            let conversionComment = null;
+
+            if (selectedCurrency === "EUR") {
+                const { eurPerUsd, fxDate } = await fetchEcbUsdToEur();
+
+                currency = "EUR";
+                rateToUse = rateUsd * eurPerUsd;
+
+                // For display/comment: keep 6 decimals for FX to match your UI
+                const fxStr = eurPerUsd.toFixed(6);
+                const eurRateStr = rateToUse.toFixed(2);
+                conversionComment = `USD ${rateUsd.toFixed(2)} × ${fxStr} = EUR ${eurRateStr}${fxDate ? ` (ECB ${fxDate})` : ""}`;
+            }
+
+            // Amount computed from rateToUse in invoice currency
+            const subtotalCents = moneyCentsFrom(hours, rateToUse);
+
+            const vatCents = vatPercent > 0 ? Math.round(subtotalCents * (vatPercent / 100)) : 0;
+            const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
+
+            // Total due = subtotal + IVA/IGIC - IRPF
+            const totalDueCents = subtotalCents + vatCents - irpfCents;
+
+            // ---- PDF headers ----
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoiceNumber}.pdf"`);
+
+            const doc = new PDFDocument({ size: "A4", margin: 50 });
+            doc.pipe(res);
+
+            const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+            const left = doc.page.margins.left;
+
+            // Header
+            doc.font("Helvetica-Bold").fontSize(22).text("INVOICE", left, 40, { width: pageW, align: "right" });
+            doc.font("Helvetica-Bold").fontSize(14).text(`Invoice # ${invoiceNumber}`, left, 66, { width: pageW, align: "right" });
+
+            // Dates / period
+            const today = todayISO();
+            const periodLabel = monthLabel(ym);
+
+            doc.font("Helvetica").fontSize(10).fillColor("#111");
+            doc.text(`Invoice date: ${today}`, left, 95);
+            doc.text(`Issue date: ${today}`, left, 110);
+            doc.text(`Invoice period: ${periodLabel}`, left, 125);
+
+            // Bill From / Bill To blocks
+            const yBlocks = 155;
+            const colGap = 24;
+            const half = (pageW - colGap) / 2;
+
+            // Bill From
+            doc.font("Helvetica-Bold").fontSize(11).text("Bill From", left, yBlocks);
+            doc.font("Helvetica").fontSize(10);
+
+            const fromLines = [
+                profile.name || "Contractor",
+                profile.taxId ? `Tax ID: ${profile.taxId}` : null,
+                profile.address || null,
+                profile.email || null,
+            ].filter(Boolean);
+
+            let yFrom = yBlocks + 16;
+            yFrom = drawWrappedLines(doc, left, yFrom, half, fromLines);
+
+            // Bill To
+            const xTo = left + half + colGap;
+            doc.font("Helvetica-Bold").fontSize(11).text("Bill To", xTo, yBlocks);
+            doc.font("Helvetica").fontSize(10);
+
+            const toLines = [
+                "SPAINLINK DEVELOPMENT SOLUTIONS S.L.",
+                "VAT/CIF: B55470280",
+                "Avenida Luis Celso Garcia Guadalupe 3 Bloque 2 Portal A Bajo A, 38111, Santa Cruz de Tenerife, España.",
+                "spainlink@spainlink.es",
+            ];
+
+            let yTo = yBlocks + 16;
+            yTo = drawWrappedLines(doc, xTo, yTo, half, toLines);
+
+            // Line items
+            let y = Math.max(yFrom, yTo) + 18;
+            doc.font("Helvetica-Bold").fontSize(12).text("Line items", left, y);
+            y += 10;
+            drawHr(doc, left, y + 6, pageW);
+            y += 14;
+
+            // Table
+            const cols = (() => {
+                const wDesc = Math.round(pageW * 0.55);
+                const wHours = Math.round(pageW * 0.15);
+                const wRate = Math.round(pageW * 0.15);
+                const wAmt = pageW - wDesc - wHours - wRate;
+
+                return [
+                    { key: "desc", label: "Description", x: left, w: wDesc, align: "left" },
+                    { key: "hours", label: "Hours", x: left + wDesc, w: wHours, align: "right" },
+                    { key: "rate", label: "Rate", x: left + wDesc + wHours, w: wRate, align: "right" },
+                    { key: "amount", label: "Amount", x: left + wDesc + wHours + wRate, w: wAmt, align: "right" },
+                ];
+            })();
+
+            const rowH = 26;
+            drawTableHeader(doc, left, y, cols, rowH);
+            y += rowH;
+
+            const row = {
+                desc: `Professional services — ${periodLabel} (approved, billable time)`,
+                hours: hours.toFixed(2),
+                rate: `${currency} ${Number(rateToUse || 0).toFixed(2)}`,
+                amount: `${currency} ${centsToMoney(subtotalCents)}`,
+            };
+
+            drawTableRow(doc, y, cols, row, rowH);
+            y += rowH + 14;
+
+            // Totals (right aligned)
+            const totalsX = left + Math.round(pageW * 0.55);
+            const totalsW = pageW - (totalsX - left);
+
+            doc.font("Helvetica").fontSize(10).fillColor("#111");
+            doc.text("Subtotal", totalsX, y, { width: totalsW * 0.5, align: "left" });
+            doc.text(`${currency} ${centsToMoney(subtotalCents)}`, totalsX, y, { width: totalsW, align: "right" });
+            y += 16;
+
+            if (vatPercent > 0) {
+                doc.text(`IGIC (${vatPercent.toFixed(2)}%)`, totalsX, y, { width: totalsW * 0.5, align: "left" });
+                doc.text(`+ ${currency} ${centsToMoney(vatCents)}`, totalsX, y, { width: totalsW, align: "right" });
+                y += 16;
+            }
+
+            if (irpfPercent > 0) {
+                doc.text(`IRPF (${irpfPercent.toFixed(2)}%)`, totalsX, y, { width: totalsW * 0.5, align: "left" });
+                doc.text(`- ${currency} ${centsToMoney(irpfCents)}`, totalsX, y, { width: totalsW, align: "right" });
+                y += 16;
+            }
+
+            doc.font("Helvetica-Bold").fontSize(12);
+            doc.text("Total due", totalsX, y, { width: totalsW * 0.5, align: "left" });
+            doc.text(`${currency} ${centsToMoney(totalDueCents)}`, totalsX, y, { width: totalsW, align: "right" });
+            y += 8;
+
+            // Comments (conversion info) — only when EUR
+            if (conversionComment) {
+                y += 18;
+                y = drawTextBox(doc, left, pageW, y, "Comments", conversionComment);
+            }
+
+            // Payment details
+            const paymentDetails = String(profile.paymentDetails || "").trim();
+            if (paymentDetails) {
+                y += 18;
+                y = drawTextBox(doc, left, pageW, y, "Payment details", paymentDetails);
+            }
+
+            // Notes (free text from settings)
+            const notes = String(profile.notes || "").trim();
+            if (notes) {
+                y += 22;
+                doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Notes", left, y);
+                y += 10;
+
+                const boxPadding = 10;
+                const boxWidth = pageW;
+                const textWidth = boxWidth - boxPadding * 2;
+
+                doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+                const textHeight = doc.heightOfString(notes, { width: textWidth });
+                const boxHeight = Math.max(60, textHeight + boxPadding * 2);
+
+                const bottomLimit = doc.page.height - doc.page.margins.bottom - 80;
+                if (y + boxHeight > bottomLimit) {
+                    doc.addPage();
+                    y = doc.page.margins.top;
+                }
+
+                doc
+                    .roundedRect(left, y, boxWidth, boxHeight, 6)
+                    .strokeColor("#e6e6e6")
+                    .lineWidth(1)
+                    .stroke();
+
+                doc.text(notes, left + boxPadding, y + boxPadding, { width: textWidth });
+                y += boxHeight;
+            }
+
+            // Footer
+            doc.font("Helvetica").fontSize(9).fillColor("#444");
+            doc.text(
+                "Generated from approved + billable Clockify time. Please keep this invoice for your records.",
+                left,
+                doc.page.height - 70,
+                { width: pageW }
+            );
+
+            // Only bump the counter AFTER the PDF stream is successfully finished.
+            res.on("finish", () => {
+                try {
+                    const p = readProfile(userId);
+
+                    let currentCounter = Number(p.nextInvoiceCounter ?? p.nextInvoiceNumber ?? 1);
+                    if (!Number.isFinite(currentCounter) || currentCounter < 1) currentCounter = 1;
+
+                    if (usedCounter != null && currentCounter === usedCounter) {
+                        p.nextInvoiceCounter = currentCounter + 1;
+                        delete p.nextInvoiceNumber; // legacy cleanup
+                        writeProfile(userId, p);
+                    }
+                } catch (err) {
+                    console.error("Failed to bump invoice counter:", err);
+                }
+            });
+
+            doc.end();
+        } catch (e) {
+            console.error(e);
+            res.status(500).send(String(e));
         }
-      });
-
-      doc.end();
-    } catch (e) {
-      console.error(e);
-      res.status(500).send(String(e));
-    }
-  });
+    });
 };

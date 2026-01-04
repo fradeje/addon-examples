@@ -5,9 +5,11 @@
   "email": "jeffperezfrade@gmail.com",
   "paymentMethod": "",
   "rate": 5,
-  "currency": "EUR",
+  "currency": "USD",
   "invoicePrefix": "JPF",
   "irpfPercent": 7,
   "paymentDetails": "IBAN 1234455\nBIC 123\nMain Street",
-  "nextInvoiceCounter": 17
+  "nextInvoiceCounter": 6,
+  "notes": "Test",
+  "vatPercent": 10
 }

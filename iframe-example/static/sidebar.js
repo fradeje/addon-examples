@@ -261,6 +261,7 @@
         set("v_address", p.address || "");
         set("v_email", p.email || "");
         set("v_paymentDetails", p.paymentDetails || "");
+        set("v_notes", p.notes || "");
 
         // RATE: comes from Clockify if available, otherwise fallback to saved
         if (clockifyRate?.rate != null) {
@@ -275,6 +276,7 @@
         set("v_invoicePrefix", getPrefix(p));
         set("v_startCount", getNextCounter(p));
         set("v_irpfPercent", p.irpfPercent ?? "");
+        set("v_vatPercent", p.vatPercent ?? p.vat ?? p.ivaIgicPercent ?? "");
 
         renderNextInvoiceNumber(p);
 
@@ -302,6 +304,7 @@
             address: get("v_address"),
             email: get("v_email"),
             paymentDetails: get("v_paymentDetails"),
+            notes: get("v_notes"),
 
             // ✅ rate is enforced from Clockify when available
             rate: forcedRate,
@@ -309,6 +312,7 @@
 
             invoicePrefix: get("v_invoicePrefix"),
             irpfPercent: get("v_irpfPercent"),
+            vatPercent: get("v_vatPercent"),
 
             nextInvoiceCounter: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : null,
 
@@ -434,7 +438,7 @@
     }
 
     wireNextInvoiceLivePreview(cachedProfileRef);
-    
+
     document.getElementById("v_currency")?.addEventListener("change", async () => {
         await updateFxPreviewUI(readForm()); // uses whatever is currently on screen
     });
@@ -606,8 +610,14 @@
             const irpfPercent = Number(cachedProfile?.irpfPercent || 0);
 
             const subtotalCents = moneyCentsFrom(billableHours, rate);
+
+            const vatPercent = Number(cachedProfile?.vatPercent || 0);
+            const vatCents = vatPercent > 0 ? Math.round(subtotalCents * (vatPercent / 100)) : 0;
+
             const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
-            const totalDueCents = subtotalCents - irpfCents;
+
+            // Total due = subtotal + IVA/IGIC - IRPF
+            const totalDueCents = subtotalCents + vatCents - irpfCents;
 
             if (statusEl) {
                 statusEl.textContent = "Preview ready ✅";
@@ -628,6 +638,8 @@
                             currency,
                             subtotal: `${currency} ${centsToMoney(subtotalCents)}`,
                             irpfPercent,
+                            vatPercent: vatPercent || 0,
+                            vat: vatCents ? `+ ${currency} ${centsToMoney(vatCents)}` : "0.00",
                             irpf: irpfCents ? `- ${currency} ${centsToMoney(irpfCents)}` : "0.00",
                             totalDue: `${currency} ${centsToMoney(totalDueCents)}`,
                             note: "Currency override does not convert FX.",

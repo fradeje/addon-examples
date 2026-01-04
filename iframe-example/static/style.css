@@ -60,14 +60,14 @@ label {
 /* Controls */
 input,
 select,
+textarea,
 button {
     width: 100%;
-    padding: 10px 12px;
+    padding: 10px;
     margin-top: 6px;
     box-sizing: border-box;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    /* squarer */
+    border-radius: 10px;
     font-size: 14px;
 }
 
@@ -219,10 +219,10 @@ pre {
 }
 
 #v_fxPreview {
-  background: #f3f4f6;
-  cursor: not-allowed;
+    background: #f3f4f6;
+    cursor: not-allowed;
 }
 
 #v_fxPreview:hover {
-  cursor: not-allowed;
+    cursor: not-allowed;
 }

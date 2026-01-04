@@ -1,0 +1,13 @@
+{
+  "name": "Jeff P. Frade",
+  "taxId": "1234567J",
+  "address": "738 Somerstone Dr",
+  "email": "jeffperezfrade@gmail.com",
+  "paymentMethod": "",
+  "rate": 10,
+  "currency": "USD",
+  "invoicePrefix": "JPF",
+  "irpfPercent": 7,
+  "paymentDetails": "IBAN 1234455\nBIC 123\nMain Street",
+  "nextInvoiceCounter": 11
+}

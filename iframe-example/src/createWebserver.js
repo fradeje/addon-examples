@@ -8,4 +8,7 @@ app.use(express.static("static"));
 const { registerInvoicePdfEndpoint } = require("./endpoints/invoicePdf");
 registerInvoicePdfEndpoint(app);
 
+const { registerVendorProfileEndpoint } = require("./endpoints/vendorProfile");
+registerVendorProfileEndpoint(app);
+
 module.exports.app = app;

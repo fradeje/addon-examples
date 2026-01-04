@@ -1,188 +1,378 @@
 const PDFDocument = require("pdfkit");
+const fs = require("fs");
+const path = require("path");
 
-// --- helpers ---
+// ----------------- helpers -----------------
 function decodeJwtPayload(token) {
-  const payload = token.split(".")[1];
-  const json = Buffer.from(payload, "base64").toString("utf8");
-  return JSON.parse(json);
+    const payload = token.split(".")[1];
+    const json = Buffer.from(payload, "base64").toString("utf8");
+    return JSON.parse(json);
 }
 
 function monthRangeUTC(ym) {
-  const [y, m] = ym.split("-").map(Number);
-  const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0)).toISOString();
-  const end = new Date(Date.UTC(y, m, 0, 23, 59, 59)).toISOString();
-  return { start, end };
+    const [y, m] = ym.split("-").map(Number);
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0)).toISOString();
+    const end = new Date(Date.UTC(y, m, 0, 23, 59, 59)).toISOString(); // last day
+    return { start, end };
+}
+
+function monthLabel(ym) {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    return d.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function secondsToHours(seconds) {
-  return Math.round((Number(seconds || 0) / 3600) * 100) / 100;
+    return Math.round((Number(seconds || 0) / 3600) * 100) / 100;
 }
 
 function centsToMoney(cents) {
-  return (Number(cents || 0) / 100).toFixed(2);
+    return (Number(cents || 0) / 100).toFixed(2);
+}
+
+function moneyCentsFrom(hours, rate) {
+    return Math.round(Number(hours || 0) * Number(rate || 0) * 100);
 }
 
 function pickTotalsFromSummaryResponse(data) {
-  // We’ve seen two shapes:
-  // A) data.groupOne[0] contains totals (duration/amount)
-  // B) data.totals[0] contains totals (totalBillableTime/totalAmountByCurrency)
-  if (Array.isArray(data?.groupOne) && data.groupOne.length) return data.groupOne[0];
-  if (Array.isArray(data?.totals) && data.totals.length) return data.totals[0];
-  if (data?.totals && typeof data.totals === "object") return data.totals;
-  if (data?.total && typeof data.total === "object") return data.total;
-  return null;
+    if (Array.isArray(data?.groupOne) && data.groupOne.length) return data.groupOne[0];
+    if (Array.isArray(data?.totals) && data.totals.length) return data.totals[0];
+    if (data?.totals && typeof data.totals === "object") return data.totals;
+    if (data?.total && typeof data.total === "object") return data.total;
+    return null;
 }
 
-async function fetchApprovedBillableSummary({ reportsUrl, workspaceId, userId, token, ym }) {
-  const { start, end } = monthRangeUTC(ym);
+async function fetchApprovedBillableSeconds({ reportsUrl, workspaceId, userId, token, ym }) {
+    const { start, end } = monthRangeUTC(ym);
+    const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
 
-  const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
+    const body = {
+        dateRangeStart: start,
+        dateRangeEnd: end,
+        users: { ids: [userId] },
+        billable: true,
+        approvalState: "APPROVED",
+        summaryFilter: { groups: ["USER"] },
+    };
 
-  const body = {
-    dateRangeStart: start,
-    dateRangeEnd: end,
-    users: { ids: [userId] },
-    billable: true,
-    approvalState: "APPROVED",
-    summaryFilter: { groups: ["USER"] },
-  };
+    const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Addon-Token": token },
+        body: JSON.stringify(body),
+    });
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Addon-Token": token,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Reports API failed ${res.status}: ${txt}`);
-  }
-
-  const data = await res.json();
-  const totals = pickTotalsFromSummaryResponse(data);
-  if (!totals) return { hours: 0, currency: null, amount: null, raw: data };
-
-  // Time can be in duration (seconds) or totalBillableTime (seconds)
-  const seconds =
-    totals.totalBillableTime ??
-    totals.billableTime ??
-    totals.totalTime ??
-    totals.duration ??
-    0;
-
-  // Money can be in totalAmountByCurrency or amounts[0].amountByCurrency or amount
-  let currency = null;
-  let amountCents = null;
-
-  if (Array.isArray(totals.totalAmountByCurrency) && totals.totalAmountByCurrency.length) {
-    currency = totals.totalAmountByCurrency[0]?.currency ?? null;
-    amountCents = totals.totalAmountByCurrency[0]?.amount ?? null;
-  }
-
-  if ((currency == null || amountCents == null) && Array.isArray(totals.amounts) && totals.amounts.length) {
-    const byCur = totals.amounts[0]?.amountByCurrency;
-    if (Array.isArray(byCur) && byCur.length) {
-      currency = byCur[0]?.currency ?? currency;
-      amountCents = byCur[0]?.amount ?? amountCents;
+    if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Reports API failed ${res.status}: ${txt}`);
     }
-  }
 
-  if (amountCents == null && totals.amount != null) {
-    amountCents = totals.amount;
-  }
+    const data = await res.json();
+    const totals = pickTotalsFromSummaryResponse(data);
+    if (!totals) return { seconds: 0, entriesCount: 0, raw: data };
 
-  return {
-    hours: secondsToHours(seconds),
-    currency,
-    amountCents,
-    rawTotals: totals,
-  };
+    const seconds =
+        totals.totalBillableTime ??
+        totals.billableTime ??
+        totals.totalTime ??
+        totals.duration ??
+        0;
+
+    return { seconds: Number(seconds || 0), entriesCount: totals.entriesCount ?? null, rawTotals: totals };
 }
 
-// --- endpoint registration ---
+// ---------- vendor profile store (file-based) ----------
+function profilesDir() {
+    return path.join(process.cwd(), "data", "vendorProfiles");
+}
+
+function ensureDir(p) {
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+
+function profilePath(userId) {
+    ensureDir(profilesDir());
+    return path.join(profilesDir(), `${userId}.json`);
+}
+
+function readProfile(userId) {
+    const fp = profilePath(userId);
+    if (!fs.existsSync(fp)) return {};
+    return JSON.parse(fs.readFileSync(fp, "utf8"));
+}
+
+function writeProfile(userId, profile) {
+    const fp = profilePath(userId);
+    fs.writeFileSync(fp, JSON.stringify(profile, null, 2), "utf8");
+}
+
+function todayISO() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+// ---------- PDF layout helpers ----------
+function drawHr(doc, x, y, w) {
+    doc.moveTo(x, y).lineTo(x + w, y).strokeColor("#e6e6e6").lineWidth(1).stroke();
+}
+
+function drawTableHeader(doc, x, y, cols, rowH) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#111");
+    cols.forEach((c) => {
+        doc.text(c.label, c.x, y + 6, { width: c.w, align: c.align || "left" });
+    });
+    doc.font("Helvetica");
+    drawHr(doc, x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
+}
+
+function drawTableRow(doc, y, cols, row, rowH) {
+    doc.fontSize(10).fillColor("#111");
+    cols.forEach((c) => {
+        const text = row[c.key] ?? "";
+        doc.text(String(text), c.x, y + 6, { width: c.w, align: c.align || "left" });
+    });
+    drawHr(doc, cols[0].x, y + rowH, cols.reduce((s, c) => s + c.w, 0));
+}
+
+function drawWrappedLines(doc, x, y, width, lines, lineGap = 2) {
+    lines.forEach((t) => {
+        doc.text(t, x, y, { width });
+        const h = doc.heightOfString(t, { width });
+        y += h + lineGap;
+    });
+    return y;
+}
+
+// ----------------- endpoint -----------------
 module.exports.registerInvoicePdfEndpoint = function registerInvoicePdfEndpoint(app) {
-  app.get("/invoice.pdf", async (req, res) => {
-    try {
-      const ym = req.query.month; // "YYYY-MM"
-      if (!ym || !/^\d{4}-\d{2}$/.test(ym)) {
-        return res.status(400).send("Missing or invalid month. Use ?month=YYYY-MM");
-      }
+    app.get("/invoice.pdf", async (req, res) => {
+        let userId = null;
+        let usedCounter = null;
 
-      // Prefer header. Allow query for debugging if needed.
-      const token = req.header("X-Addon-Token") || req.query.auth_token;
-      if (!token) return res.status(401).send("Missing X-Addon-Token");
+        try {
+            const ym = req.query.month; // "YYYY-MM"
+            if (!ym || !/^\d{4}-\d{2}$/.test(ym)) {
+                return res.status(400).send("Missing or invalid month. Use ?month=YYYY-MM");
+            }
 
-      const jwt = decodeJwtPayload(token);
-      const workspaceId = jwt.workspaceId;
-      const userId = jwt.user || req.query.userId;
-      const reportsUrl = jwt.reportsUrl;
+            const token = req.header("X-Addon-Token") || req.query.auth_token;
+            if (!token) return res.status(401).send("Missing X-Addon-Token");
 
-      if (!workspaceId || !userId || !reportsUrl) {
-        return res.status(400).send("Token missing workspaceId/user/reportsUrl");
-      }
+            const jwt = decodeJwtPayload(token);
+            const workspaceId = jwt.workspaceId;
+            userId = jwt.user || req.query.userId;
+            const reportsUrl = jwt.reportsUrl;
 
-      const summary = await fetchApprovedBillableSummary({ reportsUrl, workspaceId, userId, token, ym });
+            if (!workspaceId || !userId || !reportsUrl) {
+                return res.status(400).send("Token missing workspaceId/user/reportsUrl");
+            }
 
-      // If nothing approved/billable, return a friendly PDF anyway
-      const currency = summary.currency || "USD";
-      const amountStr = summary.amountCents != null ? centsToMoney(summary.amountCents) : "0.00";
+            // Load vendor profile
+            const profile = readProfile(userId);
 
-      // ---- build PDF ----
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="invoice-${ym}-${userId}.pdf"`
-      );
+            const prefix = (profile.invoicePrefix || "INV").trim() || "INV";
 
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
-      doc.pipe(res);
+            // ✅ canonical counter field (with legacy fallback)
+            let nextCounter =
+                profile.nextInvoiceCounter ??
+                profile.nextInvoiceNumber ?? // legacy name
+                1;
 
-      // Header
-      doc.fontSize(20).text("INVOICE", { align: "right" });
-      doc.moveDown(0.5);
+            nextCounter = Number(nextCounter);
+            if (!Number.isFinite(nextCounter) || nextCounter < 1) nextCounter = 1;
 
-      // SpainLink (Bill To) - hardcoded for MVP
-      doc.fontSize(10).text("Bill To:");
-      doc.fontSize(12).text("SPAINLINK DEVELOPMENT SOLUTIONS S.L.");
-      doc.fontSize(10).text("VAT/CIF: B55470280");
-      doc.text("Address: Avenida Luis Celso Garcia Guadalupe 3 Bloque 2 Portal A Bajo A, 38111, Santa Cruz de Tenerife, España.");
-      doc.text("Email: spainlink@spainlink.es");
-      doc.moveDown();
+            usedCounter = nextCounter;
+            const invoiceNumber = `${prefix}-${nextCounter}`;
 
-      // Vendor (Bill From) - MVP from Clockify user name
-      doc.fontSize(10).text("Bill From:");
-      doc.fontSize(12).text(jwt.name || "Contractor");
-      doc.fontSize(10).text("Tax ID: [ADD]");
-      doc.text("Address: [ADD]");
-      doc.text("Email: [ADD]");
-      doc.moveDown();
+            const currency = (profile.currency || "USD").toUpperCase();
+            const rate = Number(profile.rate || 0);
+            const irpfPercent = Number(profile.irpfPercent || 0);
 
-      // Invoice meta
-      const today = new Date().toISOString().slice(0, 10);
-      doc.fontSize(10).text(`Invoice Date: ${today}`);
-      doc.text(`Invoice Period: ${ym}`);
-      doc.text(`Workspace: ${workspaceId}`);
-      doc.moveDown();
+            // Fetch approved+billable seconds
+            const report = await fetchApprovedBillableSeconds({ reportsUrl, workspaceId, userId, token, ym });
+            const hours = secondsToHours(report.seconds);
 
-      // Line item
-      doc.fontSize(12).text("Line items", { underline: true });
-      doc.moveDown(0.5);
+            // Amount computed from rate
+            const subtotalCents = moneyCentsFrom(hours, rate);
+            const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
+            const totalDueCents = subtotalCents - irpfCents;
 
-      doc.fontSize(10).text(`Approved billable time for ${ym}`);
-      doc.text(`Hours: ${summary.hours}`);
-      doc.text(`Amount: ${currency} ${amountStr}`);
-      doc.moveDown();
+            // ---- PDF headers ----
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoiceNumber}.pdf"`);
+            const doc = new PDFDocument({ size: "A4", margin: 50 });
+            doc.pipe(res);
 
-      // Total
-      doc.fontSize(14).text(`TOTAL: ${currency} ${amountStr}`, { align: "right" });
+            const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+            const left = doc.page.margins.left;
 
-      doc.end();
-    } catch (e) {
-      console.error(e);
-      res.status(500).send(String(e));
-    }
-  });
+            // Header
+            doc.font("Helvetica-Bold").fontSize(22).text("INVOICE", left, 40, { width: pageW, align: "right" });
+            doc.font("Helvetica-Bold").fontSize(14).text(invoiceNumber, left, 66, { width: pageW, align: "right" });
+
+            // Dates / period
+            const today = todayISO();
+            const periodLabel = monthLabel(ym);
+
+            doc.font("Helvetica").fontSize(10).fillColor("#111");
+            doc.text(`Invoice date: ${today}`, left, 95);
+            doc.text(`Issue date: ${today}`, left, 110);
+            doc.text(`Invoice period: ${periodLabel}`, left, 125);
+
+            // Bill From / Bill To blocks
+            const yBlocks = 155;
+            const colGap = 24;
+            const half = (pageW - colGap) / 2;
+
+            // Bill From
+            doc.font("Helvetica-Bold").fontSize(11).text("Bill From", left, yBlocks);
+            doc.font("Helvetica").fontSize(10);
+
+            const fromLines = [
+                profile.name || "Contractor",
+                profile.taxId ? `Tax ID: ${profile.taxId}` : null,
+                profile.address || null,
+                profile.email || null,
+            ].filter(Boolean);
+
+            let yFrom = yBlocks + 16;
+            yFrom = drawWrappedLines(doc, left, yFrom, half, fromLines);
+
+            // Bill To
+            const xTo = left + half + colGap;
+            doc.font("Helvetica-Bold").fontSize(11).text("Bill To", xTo, yBlocks);
+            doc.font("Helvetica").fontSize(10);
+
+            const toLines = [
+                "SPAINLINK DEVELOPMENT SOLUTIONS S.L.",
+                "VAT/CIF: B55470280",
+                "Avenida Luis Celso Garcia Guadalupe 3 Bloque 2 Portal A Bajo A, 38111, Santa Cruz de Tenerife, España.",
+                "spainlink@spainlink.es",
+            ];
+
+            let yTo = yBlocks + 16;
+            yTo = drawWrappedLines(doc, xTo, yTo, half, toLines);
+
+            // Line items
+            let y = Math.max(yFrom, yTo) + 18;
+            doc.font("Helvetica-Bold").fontSize(12).text("Line items", left, y);
+            y += 10;
+            drawHr(doc, left, y + 6, pageW);
+            y += 14;
+
+            // Table
+            const cols = (() => {
+                const wDesc = Math.round(pageW * 0.55);
+                const wHours = Math.round(pageW * 0.15);
+                const wRate = Math.round(pageW * 0.15);
+                const wAmt = pageW - wDesc - wHours - wRate;
+
+                return [
+                    { key: "desc", label: "Description", x: left, w: wDesc, align: "left" },
+                    { key: "hours", label: "Hours", x: left + wDesc, w: wHours, align: "right" },
+                    { key: "rate", label: "Rate", x: left + wDesc + wHours, w: wRate, align: "right" },
+                    { key: "amount", label: "Amount", x: left + wDesc + wHours + wRate, w: wAmt, align: "right" },
+                ];
+            })();
+
+            const rowH = 26;
+            drawTableHeader(doc, left, y, cols, rowH);
+            y += rowH;
+
+            const row = {
+                desc: `Professional services — ${periodLabel} (approved, billable time)`,
+                hours: hours.toFixed(2),
+                rate: `${currency} ${Number(rate || 0).toFixed(2)}`,
+                amount: `${currency} ${centsToMoney(subtotalCents)}`,
+            };
+
+            drawTableRow(doc, y, cols, row, rowH);
+            y += rowH + 14;
+
+            // Totals (right aligned)
+            const totalsX = left + Math.round(pageW * 0.55);
+            const totalsW = pageW - (totalsX - left);
+
+            doc.font("Helvetica").fontSize(10).fillColor("#111");
+            doc.text("Subtotal", totalsX, y, { width: totalsW * 0.5, align: "left" });
+            doc.text(`${currency} ${centsToMoney(subtotalCents)}`, totalsX, y, { width: totalsW, align: "right" });
+            y += 16;
+
+            if (irpfPercent > 0) {
+                doc.text(`IRPF (${irpfPercent.toFixed(2)}%)`, totalsX, y, { width: totalsW * 0.5, align: "left" });
+                doc.text(`- ${currency} ${centsToMoney(irpfCents)}`, totalsX, y, { width: totalsW, align: "right" });
+                y += 16;
+            }
+
+            doc.font("Helvetica-Bold").fontSize(12);
+            doc.text("Total due", totalsX, y, { width: totalsW * 0.5, align: "left" });
+            doc.text(`${currency} ${centsToMoney(totalDueCents)}`, totalsX, y, { width: totalsW, align: "right" });
+
+            // Payment details
+            const paymentDetails = String(profile.paymentDetails || "").trim();
+            if (paymentDetails) {
+                y += 22;
+                doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Payment details", left, y);
+                y += 10;
+
+                const boxPadding = 10;
+                const boxWidth = pageW;
+                const textWidth = boxWidth - boxPadding * 2;
+
+                doc.font("Helvetica").fontSize(10).fillColor("#111");
+
+                const textHeight = doc.heightOfString(paymentDetails, { width: textWidth });
+                const boxHeight = Math.max(60, textHeight + boxPadding * 2);
+
+                const bottomLimit = doc.page.height - doc.page.margins.bottom - 80;
+                if (y + boxHeight > bottomLimit) {
+                    doc.addPage();
+                    y = doc.page.margins.top;
+                }
+
+                doc
+                    .roundedRect(left, y, boxWidth, boxHeight, 6)
+                    .strokeColor("#e6e6e6")
+                    .lineWidth(1)
+                    .stroke();
+
+                doc.text(paymentDetails, left + boxPadding, y + boxPadding, { width: textWidth });
+                y += boxHeight;
+            }
+
+            // Footer
+            doc.font("Helvetica").fontSize(9).fillColor("#444");
+            doc.text(
+                "Generated from approved + billable Clockify time. Please keep this invoice for your records.",
+                left,
+                doc.page.height - 70,
+                { width: pageW }
+            );
+
+            // ✅ IMPORTANT:
+            // Only bump the counter AFTER the PDF stream is successfully finished.
+            res.on("finish", () => {
+                try {
+                    const p = readProfile(userId);
+
+                    // read current counter (canonical + legacy fallback)
+                    let currentCounter = Number(p.nextInvoiceCounter ?? p.nextInvoiceNumber ?? 1);
+                    if (!Number.isFinite(currentCounter) || currentCounter < 1) currentCounter = 1;
+
+                    // only increment if the stored counter matches the one we used
+                    // (prevents bumping if user changed it mid-request)
+                    if (usedCounter != null && currentCounter === usedCounter) {
+                        p.nextInvoiceCounter = currentCounter + 1;
+                        delete p.nextInvoiceNumber; // cleanup legacy
+                        writeProfile(userId, p);
+                    }
+                } catch (err) {
+                    console.error("Failed to bump invoice counter:", err);
+                }
+            });
+
+            doc.end();
+        } catch (e) {
+            console.error(e);
+            res.status(500).send(String(e));
+        }
+    });
 };

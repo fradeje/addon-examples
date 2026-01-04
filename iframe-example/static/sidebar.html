@@ -78,7 +78,15 @@
                         </div>
                     </div>
 
-                    <div id="fxWrap" style="display:none;">
+                    <div id="eurBaseRateWrap" class="eur-base-rate" style="display:none;">
+                        <label id="eurBaseRateLabel" class="eur-base-rate__label">
+                            <input type="checkbox" id="v_baseRateIsEur" />
+                            <span>My base rate is in EUR</span>
+                            <span class="eur-base-rate__hint" id="eurBaseRateHint"></span>
+                        </label>
+                    </div>
+
+                    <div id="fxWrap" style="display:none; margin-top:10px;">
                         <label for="v_fxPreview">FX conversion (ECB)</label>
                         <input id="v_fxPreview" type="text" readonly />
                         <div class="hint">

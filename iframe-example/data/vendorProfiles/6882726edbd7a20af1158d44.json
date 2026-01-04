@@ -1,15 +1,16 @@
 {
-  "name": "Jeff P. Frade",
-  "taxId": "1234567J",
+  "name": "Jeff Perez",
+  "taxId": "12344356J",
   "address": "738 Somerstone Dr",
   "email": "jeffperezfrade@gmail.com",
   "paymentMethod": "",
-  "rate": 10,
+  "rate": 5,
   "currency": "EUR",
-  "invoicePrefix": "JPF",
-  "irpfPercent": 0,
-  "paymentDetails": "IBAN 1234455\nBIC 123\nMain Street",
-  "nextInvoiceCounter": 11,
-  "notes": "Test 12",
-  "vatPercent": 0
+  "invoicePrefix": "JPF-2026",
+  "irpfPercent": 7,
+  "paymentDetails": "IBAN 1234567890\nBIC REVOXXXX",
+  "nextInvoiceCounter": 7,
+  "notes": "Test Notes",
+  "vatPercent": 7,
+  "baseRateIsEur": false
 }

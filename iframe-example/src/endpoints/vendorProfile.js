@@ -61,10 +61,12 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
             notes: "",
             rate: "",
             currency: "USD",
+
+            baseRateIsEur: false,
+
             invoicePrefix: "INV",
             irpfPercent: "",
             vatPercent: "",
-            // integer counter = next invoice number to use
             nextInvoiceCounter: 1,
         };
     }
@@ -76,6 +78,12 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
 
         const fp = fileForUser(userId);
         const profile = readJson(fp, defaultProfile());
+
+        // ✅ ensure baseRateIsEur exists (migrate older files)
+        if (typeof profile.baseRateIsEur !== "boolean") {
+            profile.baseRateIsEur = false;
+            writeJson(fp, profile);
+        }
 
         // migrate legacy field names if needed
         if (profile.nextInvoiceCounter == null) {
@@ -115,13 +123,21 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
             notes: (body.notes || "").trim(),
 
             rate: body.rate === "" ? "" : toNumOrEmpty(body.rate),
+
             currency: (body.currency || "USD").trim().toUpperCase(),
+
+            baseRateIsEur:
+                ((body.currency || "USD").trim().toUpperCase() === "EUR")
+                    ? !!body.baseRateIsEur
+                    : false,
 
             invoicePrefix: (body.invoicePrefix || "INV").trim() || "INV",
             irpfPercent: body.irpfPercent === "" ? "" : toNumOrEmpty(body.irpfPercent),
             vatPercent: body.vatPercent === "" ? "" : toNumOrEmpty(body.vatPercent),
             nextInvoiceCounter: currentCounter,
         };
+
+        if (updated.currency !== "EUR") updated.baseRateIsEur = false;
 
         // ✅ NEW BEHAVIOR:
         // If user provides a counter value, ALWAYS set it (allow resets / jumps).

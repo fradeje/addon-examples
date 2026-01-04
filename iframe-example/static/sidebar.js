@@ -57,23 +57,54 @@
     async function updateFxPreviewUI(profileMaybe) {
         const currencyEl = document.getElementById("v_currency");
         const rateEl = document.getElementById("v_rate");
-        const wrap = document.getElementById("fxWrap");
+
+        const fxWrap = document.getElementById("fxWrap");
         const out = document.getElementById("v_fxPreview");
 
-        if (!currencyEl || !rateEl || !wrap || !out) return;
+        const eurWrap = document.getElementById("eurBaseRateWrap");
+        const eurCb = document.getElementById("v_baseRateIsEur");
+        const eurHint = document.getElementById("eurBaseRateHint");
+        const eurLabel = document.getElementById("eurBaseRateLabel");
+
+        if (!currencyEl || !rateEl) return;
 
         const selected = (currencyEl.value || "USD").toUpperCase();
+        const usdRate = Number(rateEl.value || 0);
 
-        // Only show when EUR is selected
+        // ---- EUR checkbox block visibility + tooltip/hint ----
+        if (eurWrap && eurCb) {
+            if (selected === "EUR") {
+                eurWrap.style.display = "";
+                const confirmText = `I confirm my rate is ${money2(usdRate)} EUR`;
+                if (eurLabel) eurLabel.title = confirmText;
+                if (eurHint) eurHint.textContent = confirmText;
+            } else {
+                eurWrap.style.display = "none";
+                eurCb.checked = false; // irrelevant outside EUR
+                if (eurHint) eurHint.textContent = "";
+                if (eurLabel) eurLabel.title = "";
+            }
+        }
+
+        // If not EUR, hide FX
+        if (!fxWrap || !out) return;
+
         if (selected !== "EUR") {
-            wrap.style.display = "none";
+            fxWrap.style.display = "none";
             out.value = "";
             return;
         }
 
-        wrap.style.display = "";
+        // If EUR is selected AND user confirms base rate is already EUR => hide FX conversion
+        if (eurCb?.checked) {
+            fxWrap.style.display = "none";
+            out.value = "";
+            return;
+        }
 
-        const usdRate = Number(rateEl.value || 0);
+        // Otherwise show FX conversion
+        fxWrap.style.display = "";
+
         if (!Number.isFinite(usdRate) || usdRate <= 0) {
             out.value = "Set a valid hourly rate first";
             return;
@@ -91,7 +122,6 @@
 
             const eurRate = usdRate * usdToEur;
             const datePart = fx.date ? ` (ECB ${fx.date})` : "";
-
             out.value = `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(eurRate)}${datePart}`;
         } catch (e) {
             out.value = "FX error: " + String(e);
@@ -264,14 +294,15 @@
         set("v_notes", p.notes || "");
 
         // RATE: comes from Clockify if available, otherwise fallback to saved
-        if (clockifyRate?.rate != null) {
-            set("v_rate", clockifyRate.rate);
-        } else {
-            set("v_rate", p.rate ?? "");
-        }
+        if (clockifyRate?.rate != null) set("v_rate", clockifyRate.rate);
+        else set("v_rate", p.rate ?? "");
 
-        // Currency stays editable; default to saved currency (or Clockify currency if nothing saved)
+        // Currency stays editable
         set("v_currency", p.currency || clockifyRate?.currency || "USD");
+
+        // ✅ base rate checkbox (only relevant when EUR; updateFxPreviewUI will hide/reset if not EUR)
+        const baseCb = document.getElementById("v_baseRateIsEur");
+        if (baseCb) baseCb.checked = !!p.baseRateIsEur;
 
         set("v_invoicePrefix", getPrefix(p));
         set("v_startCount", getNextCounter(p));
@@ -288,15 +319,15 @@
 
     function readForm() {
         const get = (id) => (document.getElementById(id)?.value ?? "").trim();
+        const getChecked = (id) => !!document.getElementById(id)?.checked;
 
         const nextCounterStr = get("v_startCount");
         const nextInvoiceCounter = nextCounterStr === "" ? null : parseInt(nextCounterStr, 10);
 
-        // IMPORTANT: ignore typed v_rate (it's locked anyway) and force Clockify rate if available
         const forcedRate =
             clockifyRate?.rate != null
                 ? clockifyRate.rate
-                : get("v_rate"); // fallback only if we couldn't fetch
+                : get("v_rate");
 
         return {
             name: get("v_name"),
@@ -306,17 +337,16 @@
             paymentDetails: get("v_paymentDetails"),
             notes: get("v_notes"),
 
-            // ✅ rate is enforced from Clockify when available
             rate: forcedRate,
             currency: get("v_currency"),
+
+            baseRateIsEur: getChecked("v_baseRateIsEur"),
 
             invoicePrefix: get("v_invoicePrefix"),
             irpfPercent: get("v_irpfPercent"),
             vatPercent: get("v_vatPercent"),
 
             nextInvoiceCounter: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : null,
-
-            // backward compatibility (backend accepts either)
             startCount: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : "",
         };
     }
@@ -465,6 +495,10 @@
 
     document.getElementById("v_currency")?.addEventListener("change", async () => {
         await updateFxPreviewUI(readForm()); // uses whatever is currently on screen
+    });
+
+    document.getElementById("v_baseRateIsEur")?.addEventListener("change", async () => {
+        await updateFxPreviewUI(readForm());
     });
 
     // Save profile button
@@ -625,20 +659,28 @@
             let rateToUse = usdRate;
             let conversionComment = null;
 
+            const baseRateIsEur = !!cachedProfile?.baseRateIsEur;
+
             if (selectedCurrency === "EUR") {
-                const fx = await loadUsdToEurFx(); // uses your /api/fx/usd-eur
-                const usdToEur = Number(fx.usdToEur);
-
-                if (Number.isFinite(usdToEur) && usdToEur > 0) {
+                if (baseRateIsEur) {
                     currency = "EUR";
-                    rateToUse = usdRate * usdToEur;
-
-                    conversionComment =
-                        `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(rateToUse)}` +
-                        (fx.date ? ` (ECB ${fx.date})` : "");
+                    rateToUse = usdRate; // treat base rate as already EUR
+                    conversionComment = `Base rate already in EUR: EUR ${money2(rateToUse)}`;
                 } else {
-                    currency = "EUR";
-                    conversionComment = "Could not load ECB FX rate";
+                    const fx = await loadUsdToEurFx();
+                    const usdToEur = Number(fx.usdToEur);
+
+                    if (Number.isFinite(usdToEur) && usdToEur > 0) {
+                        currency = "EUR";
+                        rateToUse = usdRate * usdToEur;
+
+                        conversionComment =
+                            `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(rateToUse)}` +
+                            (fx.date ? ` (ECB ${fx.date})` : "");
+                    } else {
+                        currency = "EUR";
+                        conversionComment = "Could not load ECB FX rate";
+                    }
                 }
             }
 

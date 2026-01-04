@@ -71,10 +71,27 @@
                             <input id="v_rate" type="number" step="0.01" placeholder="e.g., 28.85" />
                         </div>
                         <div>
-                            <label>Currency</label>
-                            <input id="v_currency" placeholder="USD" />
+                            <label for="v_currency">Currency</label>
+                            <select id="v_currency">
+                                <option value="USD">USD</option>
+                                <option value="EUR">EUR</option>
+                            </select>
                         </div>
                     </div>
+
+                    <div id="fxWrap" style="display:none;">
+                        <label for="v_fxPreview">FX conversion (ECB)</label>
+                        <input id="v_fxPreview" type="text" readonly />
+                        <div class="hint">
+                            Shows: freelancer’s USD rate × ECB FX = EUR rate
+                            <br />
+                            <a href="https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html" target="_blank"
+                                rel="noopener noreferrer">
+                                Check today’s ECB rate ↗
+                            </a>
+                        </div>
+                    </div>
+
                     <div class="row">
                         <div>
                             <label for="v_invoicePrefix">Invoice prefix</label>

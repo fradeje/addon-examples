@@ -4,10 +4,10 @@
   "address": "738 Somerstone Dr",
   "email": "jeffperezfrade@gmail.com",
   "paymentMethod": "",
-  "rate": 10,
-  "currency": "USD",
+  "rate": 5,
+  "currency": "EUR",
   "invoicePrefix": "JPF",
   "irpfPercent": 7,
   "paymentDetails": "IBAN 1234455\nBIC 123\nMain Street",
-  "nextInvoiceCounter": 11
+  "nextInvoiceCounter": 17
 }

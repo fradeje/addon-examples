@@ -206,3 +206,23 @@ pre {
     background-repeat: no-repeat;
     background-position: right 12px center;
 }
+
+.readonly-input {
+    background: #f3f4f6;
+    /* light gray */
+    color: #111827;
+}
+
+.readonly-input:hover {
+    cursor: not-allowed;
+    /* shows the blocked symbol */
+}
+
+#v_fxPreview {
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+#v_fxPreview:hover {
+  cursor: not-allowed;
+}

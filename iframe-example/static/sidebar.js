@@ -32,6 +32,72 @@
         return null;
     }
 
+    // ---------- ECB FX (USD->EUR) ----------
+    let fxCache = { atMs: 0, usdToEur: null, date: null };
+
+    async function loadUsdToEurFx() {
+        // cache for 6 hours
+        const now = Date.now();
+        if (fxCache.usdToEur && now - fxCache.atMs < 6 * 60 * 60 * 1000) return fxCache;
+
+        const res = await fetch("/api/fx/usd-eur");
+        if (!res.ok) throw new Error(await res.text());
+
+        const data = await res.json(); // { date, usdToEur, eurToUsd }
+        fxCache = { atMs: now, usdToEur: Number(data.usdToEur), date: data.date || null };
+        return fxCache;
+    }
+
+    function money2(n) {
+        const x = Number(n);
+        if (!Number.isFinite(x)) return "0.00";
+        return x.toFixed(2);
+    }
+
+    async function updateFxPreviewUI(profileMaybe) {
+        const currencyEl = document.getElementById("v_currency");
+        const rateEl = document.getElementById("v_rate");
+        const wrap = document.getElementById("fxWrap");
+        const out = document.getElementById("v_fxPreview");
+
+        if (!currencyEl || !rateEl || !wrap || !out) return;
+
+        const selected = (currencyEl.value || "USD").toUpperCase();
+
+        // Only show when EUR is selected
+        if (selected !== "EUR") {
+            wrap.style.display = "none";
+            out.value = "";
+            return;
+        }
+
+        wrap.style.display = "";
+
+        const usdRate = Number(rateEl.value || 0);
+        if (!Number.isFinite(usdRate) || usdRate <= 0) {
+            out.value = "Set a valid hourly rate first";
+            return;
+        }
+
+        try {
+            out.value = "Loading ECB FX…";
+            const fx = await loadUsdToEurFx();
+            const usdToEur = fx.usdToEur;
+
+            if (!Number.isFinite(usdToEur) || usdToEur <= 0) {
+                out.value = "Could not load ECB FX";
+                return;
+            }
+
+            const eurRate = usdRate * usdToEur;
+            const datePart = fx.date ? ` (ECB ${fx.date})` : "";
+
+            out.value = `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(eurRate)}${datePart}`;
+        } catch (e) {
+            out.value = "FX error: " + String(e);
+        }
+    }
+
     // ---------- Tabs ----------
     function initTabs() {
         const buttons = document.querySelectorAll(".tab");
@@ -65,13 +131,12 @@
     }
 
     function getPrefix(profile = {}) {
-        return (String(profile.invoicePrefix || "INV").trim() || "INV");
+        return String(profile.invoicePrefix || "INV").trim() || "INV";
     }
 
     function renderNextInvoiceNumber(profile = {}, typedOverride = {}) {
         const prefix = (typedOverride.invoicePrefix ?? getPrefix(profile)).trim() || "INV";
 
-        // show typed counter if present, else saved
         const rawCounter = typedOverride.nextInvoiceCounter ?? getNextCounter(profile);
         const counter = Math.max(1, parseInt(String(rawCounter), 10) || 1);
 
@@ -96,8 +161,67 @@
         prefixEl?.addEventListener("input", update);
         counterEl?.addEventListener("input", update);
 
-        // initial paint
         update();
+    }
+
+    // ---------- Clockify rate fetch (NEW) ----------
+    async function fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token }) {
+        const base = String(backendUrl || "").replace(/\/+$/, ""); // trim trailing slash
+        const url = `${base}/v1/workspaces/${workspaceId}/users?memberships=WORKSPACE`;
+
+        const res = await fetch(url, {
+            method: "GET",
+            headers: { "X-Addon-Token": token },
+        });
+
+        if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(`Clockify users endpoint failed ${res.status}: ${txt}`);
+        }
+
+        const users = await res.json();
+        if (!Array.isArray(users)) return null;
+
+        const u = users.find((x) => String(x?.id) === String(userId));
+        if (!u) return null;
+
+        // Clockify returns memberships; we need the WORKSPACE membership hourlyRate
+        const memberships = Array.isArray(u.memberships) ? u.memberships : [];
+        const m =
+            memberships.find((mm) => mm?.membershipType === "WORKSPACE") ||
+            memberships.find((mm) => mm?.membershipType) ||
+            null;
+
+        const hr = m?.hourlyRate || u?.hourlyRate || null;
+        const amount = hr?.amount;
+        const currency = hr?.currency;
+
+        if (amount == null) return null;
+
+        const amountCents = Number(amount);
+        if (!Number.isFinite(amountCents)) return null;
+
+        return {
+            amountCents,
+            rate: Math.round((amountCents / 100) * 100) / 100, // 2 decimals
+            currency: (currency || "").toUpperCase() || null,
+        };
+    }
+
+    function lockRateInput(rateInfo) {
+        const rateEl = document.getElementById("v_rate");
+        if (!rateEl) return;
+
+        // fill value if available
+        if (rateInfo && rateInfo.rate != null) {
+            rateEl.value = String(rateInfo.rate);
+        }
+
+        // lock UI
+        rateEl.disabled = true;
+        rateEl.style.background = "#f3f4f6";
+        rateEl.style.cursor = "not-allowed";
+        rateEl.title = "Hourly rate is managed in Clockify (Team → Members → Billable rate).";
     }
 
     // ---------- Profile API ----------
@@ -122,6 +246,10 @@
         return res.json();
     }
 
+    // ---------- form fill/read ----------
+    // We'll keep a cached Clockify rate and force it into saves + preview
+    let clockifyRate = null;
+
     function fillForm(p = {}) {
         const set = (id, v) => {
             const el = document.getElementById(id);
@@ -133,18 +261,27 @@
         set("v_address", p.address || "");
         set("v_email", p.email || "");
         set("v_paymentDetails", p.paymentDetails || "");
-        set("v_rate", p.rate ?? "");
-        set("v_currency", p.currency || "USD");
+
+        // RATE: comes from Clockify if available, otherwise fallback to saved
+        if (clockifyRate?.rate != null) {
+            set("v_rate", clockifyRate.rate);
+        } else {
+            set("v_rate", p.rate ?? "");
+        }
+
+        // Currency stays editable; default to saved currency (or Clockify currency if nothing saved)
+        set("v_currency", p.currency || clockifyRate?.currency || "USD");
 
         set("v_invoicePrefix", getPrefix(p));
-
-        // ✅ now editable: show current next counter value
         set("v_startCount", getNextCounter(p));
-
         set("v_irpfPercent", p.irpfPercent ?? "");
 
-        // paint read-only preview
         renderNextInvoiceNumber(p);
+
+        updateFxPreviewUI(p).catch(console.warn);
+
+        // Always lock the rate input in the UI
+        lockRateInput(clockifyRate);
     }
 
     function readForm() {
@@ -153,22 +290,29 @@
         const nextCounterStr = get("v_startCount");
         const nextInvoiceCounter = nextCounterStr === "" ? null : parseInt(nextCounterStr, 10);
 
+        // IMPORTANT: ignore typed v_rate (it's locked anyway) and force Clockify rate if available
+        const forcedRate =
+            clockifyRate?.rate != null
+                ? clockifyRate.rate
+                : get("v_rate"); // fallback only if we couldn't fetch
+
         return {
             name: get("v_name"),
             taxId: get("v_taxId"),
             address: get("v_address"),
             email: get("v_email"),
             paymentDetails: get("v_paymentDetails"),
-            rate: get("v_rate"),
+
+            // ✅ rate is enforced from Clockify when available
+            rate: forcedRate,
             currency: get("v_currency"),
 
             invoicePrefix: get("v_invoicePrefix"),
             irpfPercent: get("v_irpfPercent"),
 
-            // ✅ NEW: store editable counter
             nextInvoiceCounter: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : null,
 
-            // backward compatibility (your backend accepts either)
+            // backward compatibility (backend accepts either)
             startCount: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : "",
         };
     }
@@ -179,7 +323,12 @@
         if (!p?.taxId) missing.push("Tax ID");
         if (!p?.address) missing.push("Address");
         if (!p?.email) missing.push("Email");
-        if (p?.rate == null || p?.rate === "" || Number(p.rate) <= 0) missing.push("Hourly rate");
+
+        // rate required — use Clockify rate first
+        const effectiveRate =
+            clockifyRate?.rate != null ? clockifyRate.rate : (p?.rate == null ? "" : p.rate);
+        if (effectiveRate === "" || Number(effectiveRate) <= 0) missing.push("Hourly rate (from Clockify)");
+
         if (!p?.currency) missing.push("Currency");
         return missing;
     }
@@ -187,7 +336,6 @@
     // ---------- Reports preview ----------
     async function fetchApprovedBillableReport({ reportsUrl, workspaceId, userId, token, ym }) {
         const { start, end } = monthRangeUTC(ym);
-
         const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
 
         const body = {
@@ -253,26 +401,43 @@
     const backendUrl = jwt.backendUrl;
 
     if (dbg) {
-        dbg.textContent = JSON.stringify(
-            { workspaceId, backendUrl, reportsUrl, userId },
-            null,
-            2
-        );
+        dbg.textContent = JSON.stringify({ workspaceId, backendUrl, reportsUrl, userId }, null, 2);
     }
 
     // Load profile on open
     let cachedProfile = {};
     const cachedProfileRef = { current: cachedProfile };
 
+    // 1) Try to fetch Clockify rate first (so the form always shows the true rate)
+    try {
+        clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+    } catch (e) {
+        console.warn("Could not fetch Clockify hourly rate:", e);
+        clockifyRate = null;
+    }
+
     try {
         cachedProfile = await loadProfile(token);
         cachedProfileRef.current = cachedProfile;
         fillForm(cachedProfile);
+        await updateFxPreviewUI(cachedProfile);
+
+        const currencyEl = document.getElementById("v_currency");
+        currencyEl?.addEventListener("change", () => updateFxPreviewUI(cachedProfileRef.current));
+
+        // (optional) if rate is ever editable in the future
+        const rateEl = document.getElementById("v_rate");
+        rateEl?.addEventListener("input", () => updateFxPreviewUI(cachedProfileRef.current));
     } catch (e) {
         console.warn("Could not load profile:", e);
+        fillForm({});
     }
 
     wireNextInvoiceLivePreview(cachedProfileRef);
+    
+    document.getElementById("v_currency")?.addEventListener("change", async () => {
+        await updateFxPreviewUI(readForm()); // uses whatever is currently on screen
+    });
 
     // Save profile button
     const saveBtn = document.getElementById("saveProfile");
@@ -280,6 +445,14 @@
         saveBtn.addEventListener("click", async () => {
             try {
                 if (saveStatusEl) saveStatusEl.textContent = "Saving…";
+
+                // refresh Clockify rate before saving (in case admin changed it)
+                try {
+                    clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+                } catch (e) {
+                    console.warn("Could not refresh Clockify hourly rate:", e);
+                }
+
                 const payload = readForm();
                 await saveProfile(token, payload);
 
@@ -303,7 +476,13 @@
         const ym = document.getElementById("month")?.value;
         const format = document.getElementById("format")?.value || "preview";
 
-        // refresh profile
+        // refresh profile + Clockify rate
+        try {
+            clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+        } catch (e) {
+            console.warn("Could not refresh Clockify hourly rate:", e);
+        }
+
         try {
             cachedProfile = await loadProfile(token);
             cachedProfileRef.current = cachedProfile;
@@ -342,11 +521,9 @@
                 const cd = res.headers.get("Content-Disposition") || "";
                 let filename = null;
 
-                // filename*=UTF-8''...
                 const mStar = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
                 if (mStar) filename = decodeURIComponent(mStar[1]);
 
-                // filename="..."
                 if (!filename) {
                     const m = cd.match(/filename\s*=\s*"([^"]+)"/i) || cd.match(/filename\s*=\s*([^;]+)/i);
                     if (m) filename = (m[1] || "").trim();
@@ -419,8 +596,13 @@
 
             const billableHours = secondsToHours(billableSeconds);
 
-            const rate = Number(cachedProfile?.rate || 0);
-            const currency = (cachedProfile?.currency || "USD").toUpperCase();
+            // ✅ use Clockify rate first, fallback to saved
+            const rate =
+                Number(clockifyRate?.rate ?? cachedProfile?.rate ?? 0);
+
+            // Currency is editable in settings (no FX conversion applied)
+            const currency = (cachedProfile?.currency || clockifyRate?.currency || "USD").toUpperCase();
+
             const irpfPercent = Number(cachedProfile?.irpfPercent || 0);
 
             const subtotalCents = moneyCentsFrom(billableHours, rate);
@@ -438,11 +620,17 @@
                         month: ym,
                         billableHours,
                         nextInvoiceNumber: `${getPrefix(cachedProfile)}-${getNextCounter(cachedProfile)}`,
+                        clockifyHourlyRate: clockifyRate
+                            ? { rate: clockifyRate.rate, currency: clockifyRate.currency }
+                            : "(not available)",
                         computed: {
+                            rate,
+                            currency,
                             subtotal: `${currency} ${centsToMoney(subtotalCents)}`,
                             irpfPercent,
                             irpf: irpfCents ? `- ${currency} ${centsToMoney(irpfCents)}` : "0.00",
                             totalDue: `${currency} ${centsToMoney(totalDueCents)}`,
+                            note: "Currency override does not convert FX.",
                         },
                         rawTotals: totals,
                     },

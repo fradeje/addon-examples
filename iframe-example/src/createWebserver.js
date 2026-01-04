@@ -11,4 +11,7 @@ registerInvoicePdfEndpoint(app);
 const { registerVendorProfileEndpoint } = require("./endpoints/vendorProfile");
 registerVendorProfileEndpoint(app);
 
+const { registerEcbFxEndpoint } = require("./endpoints/ecbFxEndpoint");
+registerEcbFxEndpoint(app);
+
 module.exports.app = app;

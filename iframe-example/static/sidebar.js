@@ -338,8 +338,9 @@
     }
 
     // ---------- Reports preview ----------
-    async function fetchApprovedBillableReport({ reportsUrl, workspaceId, userId, token, ym }) {
+    async function fetchApprovedBillableProjects({ reportsUrl, workspaceId, userId, token, ym }) {
         const { start, end } = monthRangeUTC(ym);
+
         const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
 
         const body = {
@@ -348,7 +349,7 @@
             users: { ids: [userId] },
             billable: true,
             approvalState: "APPROVED",
-            summaryFilter: { groups: ["USER"] },
+            summaryFilter: { groups: ["PROJECT"] }, // ✅ PROJECT grouping
         };
 
         const res = await fetch(url, {
@@ -365,7 +366,33 @@
             throw new Error(`Reports API failed ${res.status}: ${txt}`);
         }
 
-        return res.json();
+        const data = await res.json();
+
+        const groups =
+            (Array.isArray(data?.groupOne) && data.groupOne) ||
+            (Array.isArray(data?.groupTwo) && data.groupTwo) ||
+            [];
+
+        const rows = groups
+            .map((g) => {
+                const seconds =
+                    g.totalBillableTime ??
+                    g.billableTime ??
+                    g.totalTime ??
+                    g.duration ??
+                    0;
+
+                const name =
+                    g.name ??
+                    g.projectName ??
+                    g.project?.name ??
+                    "Unknown project";
+
+                return { project: String(name), seconds: Number(seconds || 0) };
+            })
+            .filter((r) => Number.isFinite(r.seconds) && r.seconds > 0);
+
+        return { rows, raw: data };
     }
 
     // ---------- init ----------
@@ -425,9 +452,6 @@
         cachedProfileRef.current = cachedProfile;
         fillForm(cachedProfile);
         await updateFxPreviewUI(cachedProfile);
-
-        const currencyEl = document.getElementById("v_currency");
-        currencyEl?.addEventListener("change", () => updateFxPreviewUI(cachedProfileRef.current));
 
         // (optional) if rate is ever editable in the future
         const rateEl = document.getElementById("v_rate");
@@ -566,14 +590,14 @@
             }
         }
 
-        // Preview JSON
+        // Preview JSON (PROJECTS)
         try {
             if (statusEl) {
                 statusEl.textContent = "Loading…";
                 statusEl.className = "";
             }
 
-            const data = await fetchApprovedBillableReport({
+            const { rows, raw } = await fetchApprovedBillableProjects({
                 reportsUrl,
                 workspaceId,
                 userId,
@@ -581,42 +605,68 @@
                 ym,
             });
 
-            const totals = pickTotalsFromSummaryResponse(data);
-            if (!totals) {
+            if (!rows.length) {
                 if (statusEl) {
                     statusEl.textContent = "No data";
                     statusEl.className = "bad";
                 }
-                if (dbg) dbg.textContent = JSON.stringify({ raw: data }, null, 2);
+                if (dbg) dbg.textContent = JSON.stringify({ raw }, null, 2);
                 return;
             }
 
-            const billableSeconds =
-                totals.totalBillableTime ??
-                totals.billableTime ??
-                totals.totalTime ??
-                totals.duration ??
-                0;
+            // ✅ base USD rate from Clockify (locked input)
+            const usdRate = Number(clockifyRate?.rate ?? cachedProfile?.rate ?? 0);
 
-            const billableHours = secondsToHours(billableSeconds);
+            // currency selection from settings
+            const selectedCurrency = (cachedProfile?.currency || "USD").toUpperCase();
 
-            // ✅ use Clockify rate first, fallback to saved
-            const rate =
-                Number(clockifyRate?.rate ?? cachedProfile?.rate ?? 0);
+            // FX conversion for preview (match PDF behavior)
+            let currency = "USD";
+            let rateToUse = usdRate;
+            let conversionComment = null;
 
-            // Currency is editable in settings (no FX conversion applied)
-            const currency = (cachedProfile?.currency || clockifyRate?.currency || "USD").toUpperCase();
+            if (selectedCurrency === "EUR") {
+                const fx = await loadUsdToEurFx(); // uses your /api/fx/usd-eur
+                const usdToEur = Number(fx.usdToEur);
+
+                if (Number.isFinite(usdToEur) && usdToEur > 0) {
+                    currency = "EUR";
+                    rateToUse = usdRate * usdToEur;
+
+                    conversionComment =
+                        `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(rateToUse)}` +
+                        (fx.date ? ` (ECB ${fx.date})` : "");
+                } else {
+                    currency = "EUR";
+                    conversionComment = "Could not load ECB FX rate";
+                }
+            }
+
+            if (!Number.isFinite(rateToUse) || rateToUse < 0) rateToUse = 0;
+
+            // Build project lines
+            const projectLines = rows
+                .map((r) => {
+                    const hours = secondsToHours(r.seconds);
+                    const amountCents = moneyCentsFrom(hours, rateToUse);
+                    return {
+                        project: r.project,
+                        hours: Number(hours.toFixed(2)),
+                        rate: `${currency} ${money2(rateToUse)}`,
+                        amount: `${currency} ${centsToMoney(amountCents)}`,
+                        amountCents,
+                    };
+                })
+                .sort((a, b) => b.hours - a.hours);
+
+            const subtotalCents = projectLines.reduce((s, x) => s + (x.amountCents || 0), 0);
 
             const irpfPercent = Number(cachedProfile?.irpfPercent || 0);
-
-            const subtotalCents = moneyCentsFrom(billableHours, rate);
-
             const vatPercent = Number(cachedProfile?.vatPercent || 0);
-            const vatCents = vatPercent > 0 ? Math.round(subtotalCents * (vatPercent / 100)) : 0;
 
+            const vatCents = vatPercent > 0 ? Math.round(subtotalCents * (vatPercent / 100)) : 0;
             const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
 
-            // Total due = subtotal + IVA/IGIC - IRPF
             const totalDueCents = subtotalCents + vatCents - irpfCents;
 
             if (statusEl) {
@@ -628,23 +678,22 @@
                 dbg.textContent = JSON.stringify(
                     {
                         month: ym,
-                        billableHours,
                         nextInvoiceNumber: `${getPrefix(cachedProfile)}-${getNextCounter(cachedProfile)}`,
                         clockifyHourlyRate: clockifyRate
                             ? { rate: clockifyRate.rate, currency: clockifyRate.currency }
                             : "(not available)",
+                        fx: conversionComment || null,
                         computed: {
-                            rate,
                             currency,
+                            effectiveRate: rateToUse,
                             subtotal: `${currency} ${centsToMoney(subtotalCents)}`,
-                            irpfPercent,
-                            vatPercent: vatPercent || 0,
+                            vatPercent,
                             vat: vatCents ? `+ ${currency} ${centsToMoney(vatCents)}` : "0.00",
+                            irpfPercent,
                             irpf: irpfCents ? `- ${currency} ${centsToMoney(irpfCents)}` : "0.00",
                             totalDue: `${currency} ${centsToMoney(totalDueCents)}`,
-                            note: "Currency override does not convert FX.",
                         },
-                        rawTotals: totals,
+                        projects: projectLines.map(({ amountCents, ...rest }) => rest),
                     },
                     null,
                     2

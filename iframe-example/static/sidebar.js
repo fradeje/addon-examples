@@ -280,6 +280,85 @@
     // We'll keep a cached Clockify rate and force it into saves + preview
     let clockifyRate = null;
 
+    // ---------- Logo upload (optional) ----------
+    let logoDataUrl = null; // persisted in vendor profile; used by PDF
+
+    const LOGO_MAX_BYTES = 300 * 1024; // ~300KB (adjust if you want)
+    const LOGO_ALLOWED_TYPES = new Set(["image/png", "image/jpeg"]);
+
+    function setLogoPreview(dataUrl) {
+        const wrap = document.getElementById("v_logoPreviewWrap");
+        const img = document.getElementById("v_logoPreviewImg");
+        if (!wrap || !img) return;
+
+        if (dataUrl) {
+            wrap.style.display = "";
+            img.src = dataUrl;
+        } else {
+            wrap.style.display = "none";
+            img.removeAttribute("src");
+        }
+    }
+
+    function clearLogo() {
+        logoDataUrl = null;
+        const fileEl = document.getElementById("v_logoFile");
+        if (fileEl) fileEl.value = ""; // allows re-selecting same file
+        setLogoPreview(null);
+    }
+
+    function fileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error("Could not read file"));
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function wireLogoUploader() {
+        const fileEl = document.getElementById("v_logoFile");
+        const removeBtn = document.getElementById("v_logoRemove");
+
+        if (fileEl) {
+            fileEl.addEventListener("change", async () => {
+                const file = fileEl.files?.[0];
+                if (!file) return;
+
+                if (!LOGO_ALLOWED_TYPES.has(file.type)) {
+                    alert("Logo must be PNG or JPG.");
+                    fileEl.value = "";
+                    return;
+                }
+
+                if (file.size > LOGO_MAX_BYTES) {
+                    alert(`Logo is too large. Please use a smaller image (max ~${Math.round(LOGO_MAX_BYTES / 1024)}KB).`);
+                    fileEl.value = "";
+                    return;
+                }
+
+                try {
+                    const dataUrl = await fileToDataUrl(file);
+                    if (!dataUrl.startsWith("data:image/")) {
+                        throw new Error("Invalid image data");
+                    }
+                    logoDataUrl = dataUrl;
+                    setLogoPreview(logoDataUrl);
+                } catch (e) {
+                    console.error(e);
+                    alert("Could not load logo file.");
+                    fileEl.value = "";
+                }
+            });
+        }
+
+        if (removeBtn) {
+            removeBtn.addEventListener("click", () => {
+                clearLogo();
+            });
+        }
+    }
+
     function fillForm(p = {}) {
         const set = (id, v) => {
             const el = document.getElementById(id);
@@ -313,6 +392,17 @@
 
         updateFxPreviewUI(p).catch(console.warn);
 
+        // ✅ Logo from profile (saved as data URL)
+        logoDataUrl = (typeof p.logoDataUrl === "string" && p.logoDataUrl.startsWith("data:image/"))
+            ? p.logoDataUrl
+            : null;
+
+        setLogoPreview(logoDataUrl);
+
+        // also clear the file input (browser can't prefill it)
+        const logoFileEl = document.getElementById("v_logoFile");
+        if (logoFileEl) logoFileEl.value = "";
+
         // Always lock the rate input in the UI
         lockRateInput(clockifyRate);
     }
@@ -345,6 +435,7 @@
             invoicePrefix: get("v_invoicePrefix"),
             irpfPercent: get("v_irpfPercent"),
             vatPercent: get("v_vatPercent"),
+            logoDataUrl: logoDataUrl || null,
 
             nextInvoiceCounter: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : null,
             startCount: Number.isFinite(nextInvoiceCounter) ? nextInvoiceCounter : "",
@@ -454,6 +545,7 @@
         statusEl.textContent = "Loaded inside Clockify ✅";
         statusEl.className = "ok";
     }
+    wireLogoUploader();
 
     const jwt = decodeJwt(token);
     const userId = parsedURL.searchParams.get("userId") || jwt.user;

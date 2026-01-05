@@ -3,6 +3,30 @@ const fs = require("fs");
 const path = require("path");
 
 // ----------------- helpers -----------------
+
+function parseImageDataUrl(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== "string") return null;
+
+    // allow only PNG/JPEG data URLs
+    const m = dataUrl.match(/^data:image\/(png|jpeg);base64,(.+)$/i);
+    if (!m) return null;
+
+    const b64 = m[2];
+    // basic size guard (~300KB)
+    const approxBytes = Math.floor((b64.length * 3) / 4);
+    const MAX = 300 * 1024;
+    if (approxBytes > MAX) return null;
+
+    try {
+        return {
+            type: m[1].toLowerCase(),
+            buffer: Buffer.from(b64, "base64"),
+        };
+    } catch {
+        return null;
+    }
+}
+
 function decodeJwtPayload(token) {
     const payload = token.split(".")[1];
     const json = Buffer.from(payload, "base64").toString("utf8");
@@ -328,21 +352,42 @@ module.exports.registerInvoicePdfEndpoint = function registerInvoicePdfEndpoint(
             res.setHeader("Content-Type", "application/pdf");
             res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoiceNumber}.pdf"`);
 
-            doc = new PDFDocument({ size: "A4", margin: 50 });
-            doc.pipe(res);
-
             // if client closes early, stop PDF
             res.on("close", () => {
                 try { doc?.end(); } catch { }
             });
 
+            doc = new PDFDocument({ size: "A4", margin: 50 });
+            doc.pipe(res);
+
             const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
             const left = doc.page.margins.left;
 
-            // Header
-            doc.font("Helvetica-Bold").fontSize(22).text("INVOICE", left, 40, { width: pageW, align: "right" });
-            doc.font("Helvetica-Bold").fontSize(14).text(`Invoice # ${invoiceNumber}`, left, 66, { width: pageW, align: "right" });
+            // ---- Optional logo (top-left) ----
+            const logo = parseImageDataUrl(profile.logoDataUrl);
+            const logoX = left;
+            const logoY = 40;
 
+            // Keep it small so it never collides with dates
+            const LOGO_W = 120;   // max width
+            const LOGO_H = 50;    // max height
+            const LOGO_GAP = 14;  // space between logo block and header text
+
+            // Reserve horizontal space for header text if logo exists
+            const headerTextX = logo ? (left + LOGO_W + LOGO_GAP) : left;
+            const headerTextW = logo ? (pageW - LOGO_W - LOGO_GAP) : pageW;
+
+            if (logo?.buffer) {
+                try {
+                    doc.image(logo.buffer, logoX, logoY, { fit: [LOGO_W, LOGO_H] });
+                } catch (e) {
+                    console.warn("Logo render failed, ignoring:", e);
+                }
+            }
+
+            // ---- Header (shifted right if logo exists) ----
+            doc.font("Helvetica-Bold").fontSize(22).text("INVOICE", headerTextX, 40, { width: headerTextW, align: "right" });
+            doc.font("Helvetica-Bold").fontSize(14).text(`Invoice # ${invoiceNumber}`, headerTextX, 66, { width: headerTextW, align: "right" });
             // Dates / period
             const today = todayISO();
             const periodLabel = monthLabel(ym);

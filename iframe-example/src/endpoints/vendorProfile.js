@@ -36,6 +36,27 @@ function toIntOrNull(v) {
     return Number.isFinite(n) ? n : null;
 }
 
+function sanitizeLogoDataUrl(v) {
+    if (v == null || v === "") return "";
+    if (typeof v !== "string") return "";
+
+    // allow only data:image/png or data:image/jpeg
+    if (!v.startsWith("data:image/")) return "";
+    if (!(v.startsWith("data:image/png;base64,") || v.startsWith("data:image/jpeg;base64,"))) return "";
+
+    // basic size guard: approx decoded bytes = base64Len * 3/4
+    const comma = v.indexOf(",");
+    if (comma < 0) return "";
+    const b64 = v.slice(comma + 1);
+    const approxBytes = Math.floor((b64.length * 3) / 4);
+
+    // ~300KB max (keep consistent with sidebar.js)
+    const MAX = 300 * 1024;
+    if (approxBytes > MAX) return "";
+
+    return v;
+}
+
 module.exports.registerVendorProfileEndpoint = function registerVendorProfileEndpoint(app) {
     const storeDir = path.join(process.cwd(), "data", "vendorProfiles");
     ensureDir(storeDir);
@@ -59,6 +80,7 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
             email: "",
             paymentDetails: "",
             notes: "",
+            logoDataUrl: "",
             rate: "",
             currency: "USD",
 
@@ -78,6 +100,12 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
 
         const fp = fileForUser(userId);
         const profile = readJson(fp, defaultProfile());
+
+        // ✅ ensure logoDataUrl exists (migrate older files)
+        if (typeof profile.logoDataUrl !== "string") {
+            profile.logoDataUrl = "";
+            writeJson(fp, profile);
+        }
 
         // ✅ ensure baseRateIsEur exists (migrate older files)
         if (typeof profile.baseRateIsEur !== "boolean") {
@@ -125,6 +153,7 @@ module.exports.registerVendorProfileEndpoint = function registerVendorProfileEnd
             rate: body.rate === "" ? "" : toNumOrEmpty(body.rate),
 
             currency: (body.currency || "USD").trim().toUpperCase(),
+            logoDataUrl: sanitizeLogoDataUrl(body.logoDataUrl),
 
             baseRateIsEur:
                 ((body.currency || "USD").trim().toUpperCase() === "EUR")

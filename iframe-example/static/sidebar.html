@@ -61,6 +61,26 @@
                     <label>Email</label>
                     <input id="v_email" placeholder="you@email.com" />
 
+                    <label for="v_logoFile">Logo (optional)</label>
+                    <input id="v_logoFile" type="file" accept="image/png,image/jpeg" />
+
+                    <div id="v_logoPreviewWrap" style="display:none; margin-top:10px;">
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <img id="v_logoPreviewImg" alt="Logo preview"
+                                style="width:120px; height:auto; max-height:60px; object-fit:contain; border:1px solid #e6e6e6; border-radius:8px; padding:6px; background:#fff;" />
+                            <div style="flex:1; min-width:0;">
+                                <div class="hint" style="margin:0;">
+                                    This logo will appear in the top-left of the invoice PDF.
+                                    <br />
+                                    Recommended: PNG/JPG, max ~250KB, transparent PNG works best.
+                                </div>
+                                <button id="v_logoRemove" type="button" style="margin-top:8px; height:38px;">
+                                    Remove logo
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <label for="v_paymentDetails">Payment details</label>
                     <textarea id="v_paymentDetails" rows="4" placeholder="IBAN, BIC, account number, etc."></textarea>
 

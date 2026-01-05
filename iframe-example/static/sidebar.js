@@ -1,4 +1,176 @@
 (async () => {
+
+    function setDebugVisibility(show) {
+        const dbg = document.getElementById("dbg");
+        if (dbg) dbg.style.display = show ? "" : "none";
+    }
+
+    const downloadBtn = document.getElementById("downloadPdfBtn");
+    const formatEl = document.getElementById("format");
+    const btn = document.getElementById("btn");
+
+    function syncButtonsForFormat() {
+        const fmt = formatEl?.value || "preview";
+        if (btn) btn.textContent = (fmt === "pdf") ? "Load preview" : "Generate preview";
+        if (downloadBtn) downloadBtn.style.display = "none";
+        setDebugVisibility(fmt !== "pdf");
+    }
+    formatEl?.addEventListener("change", () => {
+        syncButtonsForFormat();
+        clearProjectsPreview();
+    });
+    syncButtonsForFormat();
+
+    async function downloadPdfForMonth({ ym, token }) {
+        if (statusEl) {
+            statusEl.textContent = "Generating PDF…";
+            statusEl.className = "";
+        }
+
+        const res = await fetch(`/invoice.pdf?month=${encodeURIComponent(ym)}`, {
+            headers: { "X-Addon-Token": token },
+        });
+
+        if (!res.ok) throw new Error(await res.text());
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+
+        const cd = res.headers.get("Content-Disposition") || "";
+        let filename = null;
+
+        const mStar = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+        if (mStar) filename = decodeURIComponent(mStar[1]);
+
+        if (!filename) {
+            const m = cd.match(/filename\s*=\s*"([^"]+)"/i) || cd.match(/filename\s*=\s*([^;]+)/i);
+            if (m) filename = (m[1] || "").trim();
+        }
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename || `invoice-${ym}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        if (statusEl) {
+            statusEl.textContent = "PDF downloaded ✅";
+            statusEl.className = "ok";
+        }
+    }
+
+    function fmtMoney(currency, amount) {
+        return `${currency} ${money2(amount)}`;
+    }
+
+    function renderProjectsPreview({
+        ym,
+        invoiceNumber,
+        currency,
+        rateToUse,
+        conversionComment,
+        projectLines,
+        vatPercent,
+        vatCents,
+        irpfPercent,
+        irpfCents,
+        subtotalCents,
+        totalDueCents
+    }) {
+        const wrap = document.getElementById("projectsPreview");
+        const meta = document.getElementById("previewMeta");
+        const fx = document.getElementById("previewFx");
+        const kpis = document.getElementById("previewKpis");
+        const rowsEl = document.getElementById("previewRows");
+        const totalsEl = document.getElementById("previewTotals");
+
+        if (!wrap || !meta || !kpis || !rowsEl || !totalsEl) return;
+
+        wrap.style.display = "";
+        meta.textContent = `Month: ${ym} • Next invoice: ${invoiceNumber}`;
+
+        if (conversionComment) {
+            if (fx) {
+                fx.style.display = "";
+                fx.textContent = conversionComment;
+            }
+        } else {
+            if (fx) {
+                fx.style.display = "none";
+                fx.textContent = "";
+            }
+        }
+
+        // KPIs
+        const totalHours = projectLines.reduce((s, x) => s + (Number(x.hours) || 0), 0);
+        kpis.innerHTML = `
+    <div class="preview-kpi">
+      <div class="k">Effective rate</div>
+      <div class="v">${currency} ${money2(rateToUse)}</div>
+    </div>
+    <div class="preview-kpi">
+      <div class="k">Total hours</div>
+      <div class="v">${money2(totalHours)}</div>
+    </div>
+    <div class="preview-kpi">
+      <div class="k">Subtotal</div>
+      <div class="v">${currency} ${centsToMoney(subtotalCents)}</div>
+    </div>
+  `;
+
+        // Table rows
+        rowsEl.innerHTML = projectLines
+            .map(
+                (r) => `
+      <tr>
+        <td>${escapeHtml(r.project)}</td>
+        <td class="num">${money2(r.hours)}</td>
+        <td class="num">${r.rate}</td>
+        <td class="num">${r.amount}</td>
+      </tr>
+    `
+            )
+            .join("");
+
+        // Totals
+        const showVat = Number(vatPercent) > 0;
+        const showIrpf = Number(irpfPercent) > 0;
+
+        totalsEl.innerHTML = `
+    <div class="preview-total-row"><span>Subtotal</span><strong>${currency} ${centsToMoney(subtotalCents)}</strong></div>
+    ${showVat ? `<div class="preview-total-row muted"><span>IGIC/IVA (${money2(vatPercent)}%)</span><span>+ ${currency} ${centsToMoney(vatCents)}</span></div>` : ""}
+    ${showIrpf ? `<div class="preview-total-row muted"><span>IRPF (${money2(irpfPercent)}%)</span><span>- ${currency} ${centsToMoney(irpfCents)}</span></div>` : ""}
+    <div class="preview-total-row"><span><strong>Total due</strong></span><strong>${currency} ${centsToMoney(totalDueCents)}</strong></div>
+  `;
+    }
+
+    function clearProjectsPreview() {
+        const wrap = document.getElementById("projectsPreview");
+        const rowsEl = document.getElementById("previewRows");
+        const totalsEl = document.getElementById("previewTotals");
+        const fx = document.getElementById("previewFx");
+        const meta = document.getElementById("previewMeta");
+        const kpis = document.getElementById("previewKpis");
+
+        if (wrap) wrap.style.display = "none";
+        if (rowsEl) rowsEl.innerHTML = "";
+        if (totalsEl) totalsEl.innerHTML = "";
+        if (kpis) kpis.innerHTML = "";
+        if (meta) meta.textContent = "";
+        if (fx) { fx.textContent = ""; fx.style.display = "none"; }
+    }
+
+    // simple HTML escape for project names
+    function escapeHtml(s) {
+        return String(s ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
     // ---------- helpers ----------
     function monthRangeUTC(ym) {
         const [y, m] = ym.split("-").map(Number);
@@ -623,20 +795,29 @@
     }
 
     // ---------- click ----------
-    const btn = document.getElementById("btn");
+
     if (!btn) return;
+
+    // holds latest preview state for the Download button
+    let lastPreviewState = null;
 
     btn.addEventListener("click", async () => {
         const ym = document.getElementById("month")?.value;
         const format = document.getElementById("format")?.value || "preview";
 
-        // refresh profile + Clockify rate
+        setDebugVisibility(format !== "pdf");
+        clearProjectsPreview();
+        if (downloadBtn) downloadBtn.style.display = "none";
+        lastPreviewState = null;
+
+        // refresh Clockify rate
         try {
             clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
         } catch (e) {
             console.warn("Could not refresh Clockify hourly rate:", e);
         }
 
+        // refresh profile
         try {
             cachedProfile = await loadProfile(token);
             cachedProfileRef.current = cachedProfile;
@@ -645,127 +826,45 @@
             console.warn("Could not refresh profile:", e);
         }
 
-        if (format === "pdf") {
-            const missing = profileMissingFields(cachedProfile);
-            if (missing.length) {
-                if (statusEl) {
-                    statusEl.textContent = "Complete Settings first";
-                    statusEl.className = "bad";
-                }
-                if (dbg) dbg.textContent = JSON.stringify({ missing }, null, 2);
-                switchToTab("settings");
-                return;
-            }
-
-            try {
-                if (statusEl) {
-                    statusEl.textContent = "Generating PDF…";
-                    statusEl.className = "";
-                }
-
-                const res = await fetch(`/invoice.pdf?month=${encodeURIComponent(ym)}`, {
-                    headers: { "X-Addon-Token": token },
-                });
-
-                if (!res.ok) throw new Error(await res.text());
-
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-
-                const cd = res.headers.get("Content-Disposition") || "";
-                let filename = null;
-
-                const mStar = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-                if (mStar) filename = decodeURIComponent(mStar[1]);
-
-                if (!filename) {
-                    const m = cd.match(/filename\s*=\s*"([^"]+)"/i) || cd.match(/filename\s*=\s*([^;]+)/i);
-                    if (m) filename = (m[1] || "").trim();
-                }
-
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = filename || `invoice-${ym}.pdf`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-
-                // reload after PDF so counter increments in UI
-                try {
-                    cachedProfile = await loadProfile(token);
-                    cachedProfileRef.current = cachedProfile;
-                    fillForm(cachedProfile);
-                } catch (e) {
-                    console.warn("Could not reload profile after PDF:", e);
-                }
-
-                if (statusEl) {
-                    statusEl.textContent = "PDF downloaded ✅";
-                    statusEl.className = "ok";
-                }
-                return;
-            } catch (e) {
-                if (statusEl) {
-                    statusEl.textContent = "Error";
-                    statusEl.className = "bad";
-                }
-                if (dbg) dbg.textContent = String(e);
-                console.error(e);
-                return;
-            }
-        }
-
-        // Preview JSON (PROJECTS)
         try {
             if (statusEl) {
-                statusEl.textContent = "Loading…";
+                statusEl.textContent = "Loading projects…";
                 statusEl.className = "";
             }
 
             const { rows, raw } = await fetchApprovedBillableProjects({
-                reportsUrl,
-                workspaceId,
-                userId,
-                token,
-                ym,
+                reportsUrl, workspaceId, userId, token, ym
             });
 
             if (!rows.length) {
                 if (statusEl) {
-                    statusEl.textContent = "No data";
+                    statusEl.textContent = "No billable + approved time for this month";
                     statusEl.className = "bad";
                 }
                 if (dbg) dbg.textContent = JSON.stringify({ raw }, null, 2);
                 return;
             }
 
-            // ✅ base USD rate from Clockify (locked input)
+            // base rate (Clockify wins)
             const usdRate = Number(clockifyRate?.rate ?? cachedProfile?.rate ?? 0);
-
-            // currency selection from settings
             const selectedCurrency = (cachedProfile?.currency || "USD").toUpperCase();
+            const baseRateIsEur = !!cachedProfile?.baseRateIsEur;
 
-            // FX conversion for preview (match PDF behavior)
             let currency = "USD";
             let rateToUse = usdRate;
             let conversionComment = null;
 
-            const baseRateIsEur = !!cachedProfile?.baseRateIsEur;
-
             if (selectedCurrency === "EUR") {
                 if (baseRateIsEur) {
                     currency = "EUR";
-                    rateToUse = usdRate; // treat base rate as already EUR
-                    conversionComment = `Base rate already in EUR: EUR ${money2(rateToUse)}`;
+                    rateToUse = usdRate; // treat base as already EUR
+                    conversionComment = null; // no FX line
                 } else {
                     const fx = await loadUsdToEurFx();
                     const usdToEur = Number(fx.usdToEur);
-
                     if (Number.isFinite(usdToEur) && usdToEur > 0) {
                         currency = "EUR";
                         rateToUse = usdRate * usdToEur;
-
                         conversionComment =
                             `USD ${money2(usdRate)} × ${usdToEur.toFixed(6)} = EUR ${money2(rateToUse)}` +
                             (fx.date ? ` (ECB ${fx.date})` : "");
@@ -778,7 +877,6 @@
 
             if (!Number.isFinite(rateToUse) || rateToUse < 0) rateToUse = 0;
 
-            // Build project lines
             const projectLines = rows
                 .map((r) => {
                     const hours = secondsToHours(r.seconds);
@@ -795,36 +893,43 @@
 
             const subtotalCents = projectLines.reduce((s, x) => s + (x.amountCents || 0), 0);
 
-            const irpfPercent = Number(cachedProfile?.irpfPercent || 0);
-            const vatPercent = Number(cachedProfile?.vatPercent || 0);
+            const irpfPercent = Number(cachedProfile?.irpfPercent || 0) || 0;
+            const vatPercent = Number(cachedProfile?.vatPercent || 0) || 0;
 
             const vatCents = vatPercent > 0 ? Math.round(subtotalCents * (vatPercent / 100)) : 0;
             const irpfCents = irpfPercent > 0 ? Math.round(subtotalCents * (irpfPercent / 100)) : 0;
-
             const totalDueCents = subtotalCents + vatCents - irpfCents;
 
-            if (statusEl) {
-                statusEl.textContent = "Preview ready ✅";
-                statusEl.className = "ok";
-            }
+            const invoiceNumber = `${getPrefix(cachedProfile)}-${getNextCounter(cachedProfile)}`;
 
+            renderProjectsPreview({
+                ym,
+                invoiceNumber,
+                currency,
+                rateToUse,
+                conversionComment,
+                projectLines,
+                vatPercent,
+                vatCents,
+                irpfPercent,
+                irpfCents,
+                subtotalCents,
+                totalDueCents
+            });
+
+            // still keep debug JSON if you want
             if (dbg) {
                 dbg.textContent = JSON.stringify(
                     {
                         month: ym,
-                        nextInvoiceNumber: `${getPrefix(cachedProfile)}-${getNextCounter(cachedProfile)}`,
-                        clockifyHourlyRate: clockifyRate
-                            ? { rate: clockifyRate.rate, currency: clockifyRate.currency }
-                            : "(not available)",
+                        invoiceNumber,
                         fx: conversionComment || null,
-                        computed: {
+                        totals: {
                             currency,
                             effectiveRate: rateToUse,
                             subtotal: `${currency} ${centsToMoney(subtotalCents)}`,
                             vatPercent,
-                            vat: vatCents ? `+ ${currency} ${centsToMoney(vatCents)}` : "0.00",
                             irpfPercent,
-                            irpf: irpfCents ? `- ${currency} ${centsToMoney(irpfCents)}` : "0.00",
                             totalDue: `${currency} ${centsToMoney(totalDueCents)}`,
                         },
                         projects: projectLines.map(({ amountCents, ...rest }) => rest),
@@ -833,9 +938,48 @@
                     2
                 );
             }
+
+            if (statusEl) {
+                statusEl.textContent = "Preview ready ✅";
+                statusEl.className = "ok";
+            }
+
+            // If output is PDF, enable the 2nd step button
+            if (format === "pdf" && downloadBtn) {
+                lastPreviewState = { ym };
+                downloadBtn.style.display = "";
+            }
+
         } catch (e) {
             if (statusEl) {
                 statusEl.textContent = "Error";
+                statusEl.className = "bad";
+            }
+            if (dbg) dbg.textContent = String(e);
+            console.error(e);
+        }
+    });
+
+    downloadBtn?.addEventListener("click", async () => {
+        if (!lastPreviewState?.ym) return;
+
+        try {
+            await downloadPdfForMonth({ ym: lastPreviewState.ym, token });
+
+            // reload profile after PDF so counter increments in UI
+            try {
+                cachedProfile = await loadProfile(token);
+                cachedProfileRef.current = cachedProfile;
+                fillForm(cachedProfile);
+            } catch (e) {
+                console.warn("Could not reload profile after PDF:", e);
+            }
+
+            // hide download button after success (optional)
+            downloadBtn.style.display = "none";
+        } catch (e) {
+            if (statusEl) {
+                statusEl.textContent = "PDF error";
                 statusEl.className = "bad";
             }
             if (dbg) dbg.textContent = String(e);

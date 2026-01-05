@@ -1,56 +1,60 @@
 :root {
-  --border: #e6e6e6;
-  --muted: #6b7280;
-  --bg: #f6f7f9;          /* subtle app background like Clockify */
-  --panel: #ffffff;       /* card background */
-  --control: #ffffff;     /* inputs */
-  --control-muted: #f3f4f6; /* buttons / readonly */
-  --text: #111827;
-  --ok: #0a7;
-  --bad: #c00;
+    --border: #e6e6e6;
+    --muted: #6b7280;
+    --bg: #f6f7f9;
+    /* subtle app background like Clockify */
+    --panel: #ffffff;
+    /* card background */
+    --control: #ffffff;
+    /* inputs */
+    --control-muted: #f3f4f6;
+    /* buttons / readonly */
+    --text: #111827;
+    --ok: #0a7;
+    --bad: #c00;
 }
 
 /* Base */
 body {
-  margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
 }
 
 .wrap {
-  padding: 16px;
+    padding: 16px;
 }
 
 /* Main card */
 .card {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  max-width: 560px;
-  background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    max-width: 560px;
+    background: var(--panel);
 }
 
 /* Titles */
 h2 {
-  margin: 0 0 6px;
-  font-size: 22px;
-  letter-spacing: -0.2px;
+    margin: 0 0 6px;
+    font-size: 22px;
+    letter-spacing: -0.2px;
 }
 
 p {
-  margin: 0 0 12px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.4;
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
 }
 
 label {
-  display: block;
-  margin-top: 12px;
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--text);
+    display: block;
+    margin-top: 12px;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text);
 }
 
 /* Controls */
@@ -58,176 +62,306 @@ input,
 select,
 textarea,
 button {
-  width: 100%;
-  padding: 10px;
-  margin-top: 6px;
-  box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: 14px;
+    width: 100%;
+    padding: 10px;
+    margin-top: 6px;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 14px;
 }
 
 input,
 select {
-  background: var(--control);
-  height: 44px;
+    background: var(--control);
+    height: 44px;
 }
 
 textarea {
-  background: var(--control);
-  height: auto;
-  resize: vertical;
+    background: var(--control);
+    height: auto;
+    resize: vertical;
 }
 
 select {
-  appearance: auto;
+    appearance: auto;
 }
 
 button {
-  cursor: pointer;
-  font-weight: 700;
-  background: var(--control-muted);
-  height: 46px;
+    cursor: pointer;
+    font-weight: 700;
+    background: var(--control-muted);
+    height: 46px;
 }
 
 button:hover {
-  filter: brightness(0.98);
+    filter: brightness(0.98);
 }
 
 /* Layout helpers */
 .row {
-  display: flex;
-  gap: 12px;
+    display: flex;
+    gap: 12px;
 }
 
-.row > div {
-  flex: 1;
-  min-width: 0;
+.row>div {
+    flex: 1;
+    min-width: 0;
 }
 
 .hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--muted);
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--muted);
 }
 
 /* Debug block */
 pre {
-  margin-top: 12px;
-  background: var(--control-muted);
-  padding: 12px;
-  border-radius: 8px;
-  overflow: auto;
-  font-size: 12px;
-  border: 1px solid var(--border);
+    margin-top: 12px;
+    background: var(--control-muted);
+    padding: 12px;
+    border-radius: 8px;
+    overflow: auto;
+    font-size: 12px;
+    border: 1px solid var(--border);
 }
 
 /* Status colors */
 .ok {
-  color: var(--ok);
-  font-weight: 800;
+    color: var(--ok);
+    font-weight: 800;
 }
 
 .bad {
-  color: var(--bad);
-  font-weight: 800;
+    color: var(--bad);
+    font-weight: 800;
 }
 
 /* Tabs (fixes overlap line by moving separator to tabs container) */
 .tabs {
-  display: flex;
-  gap: 10px;
-  margin: 14px 0 0;
-  border-bottom: 1px solid var(--border); /* separator lives here */
+    display: flex;
+    gap: 10px;
+    margin: 14px 0 0;
+    border-bottom: 1px solid var(--border);
+    /* separator lives here */
 }
 
 .tab {
-  border: 1px solid var(--border);
-  border-bottom: none; /* merges into separator */
-  background: var(--control-muted);
-  padding: 10px 14px;
-  border-radius: 8px 8px 0 0;
-  font-weight: 800;
-  cursor: pointer;
-  min-width: 140px;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    /* merges into separator */
+    background: var(--control-muted);
+    padding: 10px 14px;
+    border-radius: 8px 8px 0 0;
+    font-weight: 800;
+    cursor: pointer;
+    min-width: 140px;
 }
 
 .tab.active {
-  background: var(--panel);
-  position: relative;
-  top: 1px; /* hides separator under active tab */
+    background: var(--panel);
+    position: relative;
+    top: 1px;
+    /* hides separator under active tab */
 }
 
 /* Panels: no border-top (prevents line over inputs) */
 .tab-panel {
-  display: none;
-  padding-top: 14px;
+    display: none;
+    padding-top: 14px;
 }
 
 .tab-panel.active {
-  display: block;
+    display: block;
 }
 
 /* Optional: nested .card styling (lighter look inside the main card) */
 .card .card {
-  border-radius: 12px;
-  background: #fff;
+    border-radius: 12px;
+    background: #fff;
 }
 
 /* Read-only / computed fields */
 .readonly-input,
 #v_fxPreview {
-  background: var(--control-muted);
-  color: #111827;
-  cursor: not-allowed;
-  user-select: none;
+    background: var(--control-muted);
+    color: #111827;
+    cursor: not-allowed;
+    user-select: none;
 }
 
 .readonly-input:focus,
 #v_fxPreview:focus {
-  outline: none;
-  box-shadow: none;
-  border-color: var(--border);
+    outline: none;
+    box-shadow: none;
+    border-color: var(--border);
 }
 
 /* Read-only icon on hover */
 .readonly-input {
-  padding-right: 40px; /* room for the icon */
+    padding-right: 40px;
+    /* room for the icon */
 }
 
 .readonly-input:hover {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='7' y1='7' x2='17' y2='17'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='7' y1='7' x2='17' y2='17'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
 }
 
 /* ✅ Fix checkbox being styled like a text input */
 input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  accent-color: #111;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    accent-color: #111;
 }
 
 /* EUR base-rate checkbox row + inline confirmation */
 .eur-base-rate {
-  margin-top: 10px;
+    margin-top: 10px;
 }
 
 .eur-base-rate__label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
 }
 
 .eur-base-rate__hint {
-  margin-left: 4px;     /* closer to checkbox/text */
-  font-size: 12px;      /* smaller */
-  color: var(--muted);  /* muted */
-  line-height: 1;
+    margin-left: 4px;
+    /* closer to checkbox/text */
+    font-size: 12px;
+    /* smaller */
+    color: var(--muted);
+    /* muted */
+    line-height: 1;
+}
+
+/* ---------- Projects preview ---------- */
+.preview-card {
+    margin-top: 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+    padding: 14px;
+}
+
+.preview-top {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.preview-title {
+    font-weight: 900;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.preview-sub {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.preview-kpis {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.preview-kpi {
+    border: 1px solid var(--border);
+    background: #fff;
+    border-radius: 10px;
+    padding: 8px 10px;
+    min-width: 140px;
+}
+
+.preview-kpi .k {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.preview-kpi .v {
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 900;
+}
+
+.preview-table-wrap {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.preview-table thead th {
+    background: #f3f4f6;
+    padding: 10px 10px;
+    text-align: left;
+    font-weight: 900;
+    border-bottom: 1px solid var(--border);
+}
+
+.preview-table td {
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.preview-table tr:last-child td {
+    border-bottom: none;
+}
+
+.preview-table .num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.preview-totals {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.preview-total-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.preview-total-row.muted {
+    color: var(--muted);
+}
+
+.preview-total-row strong {
+    font-weight: 900;
+}
+
+.btn-primary {
+    background: #111827;
+    color: #fff;
+    border: 1px solid #111827;
+}
+
+.btn-primary:hover {
+    filter: brightness(0.98);
 }

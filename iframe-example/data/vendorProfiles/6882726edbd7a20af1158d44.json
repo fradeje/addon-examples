@@ -7,11 +7,11 @@
   "rate": 5,
   "currency": "EUR",
   "invoicePrefix": "JPF-2026",
-  "irpfPercent": 7,
+  "irpfPercent": 0,
   "paymentDetails": "IBAN 1234567890\nBIC REVOXXXX",
-  "nextInvoiceCounter": 11,
+  "nextInvoiceCounter": 13,
   "notes": "Test Notes",
-  "vatPercent": 7,
+  "vatPercent": 0,
   "baseRateIsEur": false,
   "logoDataUrl": ""
 }

@@ -37,10 +37,42 @@
 
                 <div class="hint">
                     Status: <span id="status" class="bad">Not connected yet</span><br />
-                    Next: we’ll call Clockify Reports API and compute totals.
                 </div>
 
                 <pre id="dbg">(debug)</pre>
+
+                <!-- Projects preview (shown after loading) -->
+                <div id="projectsPreview" class="preview-card" style="display:none;">
+                    <div class="preview-top">
+                        <div>
+                            <div class="preview-title">Projects preview</div>
+                            <div class="preview-sub" id="previewMeta"></div>
+                            <div class="preview-sub" id="previewFx" style="display:none;"></div>
+                        </div>
+                        <div class="preview-kpis" id="previewKpis"></div>
+                    </div>
+
+                    <div class="preview-table-wrap">
+                        <table class="preview-table">
+                            <thead>
+                                <tr>
+                                    <th>Project</th>
+                                    <th class="num">Hours</th>
+                                    <th class="num">Rate</th>
+                                    <th class="num">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody id="previewRows"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="preview-totals" id="previewTotals"></div>
+                </div>
+
+                <!-- Shown only when Output = PDF and a preview was loaded -->
+                <button id="downloadPdfBtn" class="btn-primary" style="display:none; margin-top:12px;">
+                    Download PDF
+                </button>
             </div>
 
             <div id="tab-settings" class="tab-panel">

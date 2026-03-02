@@ -3,7 +3,7 @@
   "key": "iframe-examples",
   "name": "Contractor Invoice Generator",
   "description": "Generate monthly contractor invoices (PDF) from approved, billable Clockify time.",
-  "baseUrl": "https://bags-expires-nick-lines.trycloudflare.com",
+  "baseUrl": "https://addon-examples.onrender.com",
   "minimalSubscriptionPlan": "FREE",
   "scopes": ["USER_READ", "TIME_ENTRY_READ", "PROJECT_READ"],
   "lifecycle": [

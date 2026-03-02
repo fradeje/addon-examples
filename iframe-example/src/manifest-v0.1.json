@@ -3,9 +3,9 @@
   "key": "iframe-examples",
   "name": "Contractor Invoice Generator",
   "description": "Generate monthly contractor invoices (PDF) from approved, billable Clockify time.",
-  "baseUrl": "https://uniaxially-nonphonetic-kelsey.ngrok-free.dev",
+  "baseUrl": "https://bags-expires-nick-lines.trycloudflare.com",
   "minimalSubscriptionPlan": "FREE",
-  "scopes": ["USER_READ", "REPORTS_READ", "TIME_ENTRIES_READ", "PROJECTS_READ", "TAGS_READ"],
+  "scopes": ["USER_READ", "TIME_ENTRY_READ", "PROJECT_READ"],
   "lifecycle": [
     { "type": "SETTINGS_UPDATED", "path": "/lifecycle/settings-updated" }
   ],
@@ -15,7 +15,7 @@
       "type": "sidebar",
       "accessLevel": "EVERYONE",
       "path": "/sidebar.html",
-      "label": "CONTRACTOR INVOICES",
+      "label": "INVOICES",
       "iconPath": "/tab_icon.svg"
     }
   ]

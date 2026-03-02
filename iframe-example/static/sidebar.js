@@ -367,9 +367,9 @@
     }
 
     // ---------- Clockify rate fetch (NEW) ----------
-    async function fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token }) {
-        const base = String(backendUrl || "").replace(/\/+$/, ""); // trim trailing slash
-        const url = `${base}/v1/workspaces/${workspaceId}/users?memberships=WORKSPACE`;
+    async function fetchClockifyHourlyRate({ backendUrl, workspaceId, token }) {
+        const base = String(backendUrl || "").replace(/\/+$/, "");
+        const url = `${base}/v1/user?include-memberships=true`;
 
         const res = await fetch(url, {
             method: "GET",
@@ -378,35 +378,32 @@
 
         if (!res.ok) {
             const txt = await res.text();
-            throw new Error(`Clockify users endpoint failed ${res.status}: ${txt}`);
+            throw new Error(`Clockify /v1/user failed ${res.status}: ${txt}`);
         }
 
-        const users = await res.json();
-        if (!Array.isArray(users)) return null;
+        const me = await res.json();
+        const memberships = Array.isArray(me?.memberships) ? me.memberships : [];
 
-        const u = users.find((x) => String(x?.id) === String(userId));
-        if (!u) return null;
-
-        // Clockify returns memberships; we need the WORKSPACE membership hourlyRate
-        const memberships = Array.isArray(u.memberships) ? u.memberships : [];
-        const m =
-            memberships.find((mm) => mm?.membershipType === "WORKSPACE") ||
-            memberships.find((mm) => mm?.membershipType) ||
+        // Prefer WORKSPACE membership for this workspace
+        const wsMembership =
+            memberships.find(
+                (m) =>
+                    m?.membershipType === "WORKSPACE" &&
+                    String(m?.targetId) === String(workspaceId)
+            ) ||
+            // fallback: sometimes structure differs; keep it defensive
+            memberships.find((m) => m?.membershipType === "WORKSPACE") ||
             null;
 
-        const hr = m?.hourlyRate || u?.hourlyRate || null;
-        const amount = hr?.amount;
-        const currency = hr?.currency;
+        const hr = wsMembership?.hourlyRate || null;
+        const amountCents = Number(hr?.amount);
 
-        if (amount == null) return null;
-
-        const amountCents = Number(amount);
         if (!Number.isFinite(amountCents)) return null;
 
         return {
             amountCents,
-            rate: Math.round((amountCents / 100) * 100) / 100, // 2 decimals
-            currency: (currency || "").toUpperCase() || null,
+            rate: Math.round((amountCents / 100) * 100) / 100,
+            currency: (hr?.currency || "").toUpperCase() || null,
         };
     }
 
@@ -414,16 +411,21 @@
         const rateEl = document.getElementById("v_rate");
         if (!rateEl) return;
 
-        // fill value if available
-        if (rateInfo && rateInfo.rate != null) {
-            rateEl.value = String(rateInfo.rate);
-        }
+        const hasClockifyRate = rateInfo && rateInfo.rate != null && Number(rateInfo.rate) > 0;
 
-        // lock UI
-        rateEl.disabled = true;
-        rateEl.style.background = "#f3f4f6";
-        rateEl.style.cursor = "not-allowed";
-        rateEl.title = "Hourly rate is managed in Clockify (Team → Members → Billable rate).";
+        if (hasClockifyRate) {
+            rateEl.value = String(rateInfo.rate);
+            rateEl.disabled = true;
+            rateEl.style.background = "#f3f4f6";
+            rateEl.style.cursor = "not-allowed";
+            rateEl.title = "Hourly rate is managed in Clockify (Team → Members → Billable rate).";
+        } else {
+            // ✅ allow manual entry if Clockify rate is unavailable for this user
+            rateEl.disabled = false;
+            rateEl.style.background = "";
+            rateEl.style.cursor = "";
+            rateEl.title = "Could not read your rate from Clockify. Enter it manually (or ask an admin to set Billable rate).";
+        }
     }
 
     // ---------- Profile API ----------
@@ -586,10 +588,7 @@
         const nextCounterStr = get("v_startCount");
         const nextInvoiceCounter = nextCounterStr === "" ? null : parseInt(nextCounterStr, 10);
 
-        const forcedRate =
-            clockifyRate?.rate != null
-                ? clockifyRate.rate
-                : get("v_rate");
+        const forcedRate = clockifyRate?.rate != null ? clockifyRate.rate : get("v_rate");
 
         return {
             name: get("v_name"),
@@ -631,61 +630,141 @@
     }
 
     // ---------- Reports preview ----------
-    async function fetchApprovedBillableProjects({ reportsUrl, workspaceId, userId, token, ym }) {
-        const { start, end } = monthRangeUTC(ym);
 
-        const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
+    // ---------- Projects index (id -> name) ----------
+    let projectsIndexCache = { atMs: 0, map: null };
 
-        const body = {
-            dateRangeStart: start,
-            dateRangeEnd: end,
-            users: { ids: [userId] },
-            billable: true,
-            approvalState: "APPROVED",
-            summaryFilter: { groups: ["PROJECT"] }, // ✅ PROJECT grouping
-        };
-
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Addon-Token": token,
-            },
-            body: JSON.stringify(body),
-        });
-
-        if (!res.ok) {
-            const txt = await res.text();
-            throw new Error(`Reports API failed ${res.status}: ${txt}`);
+    async function loadProjectsIndex({ backendUrl, workspaceId, token }) {
+        // cache for 10 minutes
+        const now = Date.now();
+        if (projectsIndexCache.map && now - projectsIndexCache.atMs < 10 * 60 * 1000) {
+            return projectsIndexCache.map;
         }
 
-        const data = await res.json();
+        const base = String(backendUrl || "").replace(/\/+$/, "");
+        const pageSize = 200;
 
-        const groups =
-            (Array.isArray(data?.groupOne) && data.groupOne) ||
-            (Array.isArray(data?.groupTwo) && data.groupTwo) ||
-            [];
+        const map = new Map();
+        for (let page = 1; page <= 200; page++) {
+            const qs = new URLSearchParams();
+            qs.set("page", String(page));
+            qs.set("page-size", String(pageSize));
 
-        const rows = groups
-            .map((g) => {
-                const seconds =
-                    g.totalBillableTime ??
-                    g.billableTime ??
-                    g.totalTime ??
-                    g.duration ??
-                    0;
+            const url = `${base}/v1/workspaces/${workspaceId}/projects?${qs.toString()}`;
 
-                const name =
-                    g.name ??
-                    g.projectName ??
-                    g.project?.name ??
-                    "Unknown project";
+            const res = await fetch(url, {
+                method: "GET",
+                headers: { "X-Addon-Token": token },
+            });
 
-                return { project: String(name), seconds: Number(seconds || 0) };
-            })
+            // If user can't read projects, just stop and use fallback IDs
+            if (!res.ok) break;
+
+            const batch = await res.json();
+            if (!Array.isArray(batch) || batch.length === 0) break;
+
+            for (const p of batch) {
+                if (p?.id && p?.name) map.set(String(p.id), String(p.name));
+            }
+
+            if (batch.length < pageSize) break;
+        }
+
+        projectsIndexCache = { atMs: now, map };
+        return map;
+    }
+
+    async function fetchBillableApprovedProjectsFromTimeEntries({ backendUrl, workspaceId, userId, token, ym }) {
+        const { start, end } = monthRangeUTC(ym);
+
+        const base = String(backendUrl || "").replace(/\/+$/, "");
+        const pageSize = 200;
+
+        const all = [];
+        for (let page = 1; page <= 200; page++) {
+            const qs = new URLSearchParams();
+            qs.set("start", start);
+            qs.set("end", end);
+            qs.set("hydrated", "false");
+            qs.set("in-progress", "false");
+            qs.set("page", String(page));
+            qs.set("page-size", String(pageSize));
+
+            const url = `${base}/v1/workspaces/${workspaceId}/user/${userId}/time-entries?${qs.toString()}`;
+
+            const res = await fetch(url, {
+                method: "GET",
+                headers: { "X-Addon-Token": token },
+            });
+
+            if (!res.ok) {
+                const txt = await res.text();
+                throw new Error(`Time Entries API failed ${res.status}: ${txt}`);
+            }
+
+            const batch = await res.json();
+            if (!Array.isArray(batch) || batch.length === 0) break;
+
+            all.push(...batch);
+            if (batch.length < pageSize) break;
+        }
+
+        const approvalsMode = all.some((t) =>
+            t?.approvalRequest ||
+            typeof t?.approvalStatus === "string" ||
+            typeof t?.approvalState === "string" ||
+            typeof t?.approval === "string" ||
+            t?.isLocked === true
+        );
+
+        const isApproved = (t) => {
+            const s =
+                t?.approvalRequest?.status ||
+                t?.approvalStatus ||
+                t?.approvalState ||
+                t?.approval;
+
+            if (typeof s === "string") return s.toUpperCase() === "APPROVED";
+            if (approvalsMode) return t?.isLocked === true;
+            return true;
+        };
+
+        const filtered = all
+            .filter((t) => t && t.timeInterval && t.timeInterval.start && t.timeInterval.end)
+            .filter((t) => t.billable === true)
+            .filter((t) => isApproved(t));
+        const projectsIndex = await loadProjectsIndex({ backendUrl, workspaceId, token });
+        const byProject = new Map();
+
+        for (const t of filtered) {
+            const dur =
+                Number(t?.timeInterval?.duration) ||
+                Math.max(
+                    0,
+                    (new Date(t.timeInterval.end).getTime() - new Date(t.timeInterval.start).getTime()) / 1000
+                );
+
+            if (!Number.isFinite(dur) || dur <= 0) continue;
+
+            const projectId = t?.project?.id || t?.projectId || null;
+
+            const name =
+                t?.project?.name ||
+                t?.projectName ||
+                (projectId ? projectsIndex.get(String(projectId)) : null) ||
+                (projectId ? `Project ${projectId}` : "Professional services");
+
+            byProject.set(name, (byProject.get(name) || 0) + dur);
+        }
+
+        const rows = Array.from(byProject.entries())
+            .map(([project, seconds]) => ({ project: String(project), seconds: Number(seconds) }))
             .filter((r) => Number.isFinite(r.seconds) && r.seconds > 0);
 
-        return { rows, raw: data };
+        return {
+            rows,
+            raw: { totalFetched: all.length, approvalsMode, filteredCount: filtered.length },
+        };
     }
 
     // ---------- init ----------
@@ -720,13 +799,12 @@
     wireLogoUploader();
 
     const jwt = decodeJwt(token);
-    const userId = parsedURL.searchParams.get("userId") || jwt.user;
+    const userId = jwt.user;
     const workspaceId = jwt.workspaceId;
-    const reportsUrl = jwt.reportsUrl;
     const backendUrl = jwt.backendUrl;
 
     if (dbg) {
-        dbg.textContent = JSON.stringify({ workspaceId, backendUrl, reportsUrl, userId }, null, 2);
+        dbg.textContent = JSON.stringify({ workspaceId, backendUrl, userId }, null, 2);
     }
 
     // Load profile on open
@@ -735,7 +813,7 @@
 
     // 1) Try to fetch Clockify rate first (so the form always shows the true rate)
     try {
-        clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+        clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, token });
     } catch (e) {
         console.warn("Could not fetch Clockify hourly rate:", e);
         clockifyRate = null;
@@ -774,7 +852,7 @@
 
                 // refresh Clockify rate before saving (in case admin changed it)
                 try {
-                    clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+                    clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, token });
                 } catch (e) {
                     console.warn("Could not refresh Clockify hourly rate:", e);
                 }
@@ -812,7 +890,7 @@
 
         // refresh Clockify rate
         try {
-            clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, userId, token });
+            clockifyRate = await fetchClockifyHourlyRate({ backendUrl, workspaceId, token });
         } catch (e) {
             console.warn("Could not refresh Clockify hourly rate:", e);
         }
@@ -832,8 +910,12 @@
                 statusEl.className = "";
             }
 
-            const { rows, raw } = await fetchApprovedBillableProjects({
-                reportsUrl, workspaceId, userId, token, ym
+            const { rows, raw } = await fetchBillableApprovedProjectsFromTimeEntries({
+                backendUrl,
+                workspaceId,
+                userId,
+                token,
+                ym,
             });
 
             if (!rows.length) {

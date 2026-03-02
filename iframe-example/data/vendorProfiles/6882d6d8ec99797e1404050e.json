@@ -1,0 +1,16 @@
+{
+  "name": "Jeff Perez Frade",
+  "taxId": "123456J",
+  "address": "Avenida Luis Celso Garcia Guadalupe 3",
+  "email": "jeff.frade@spainlink.es",
+  "paymentDetails": "IBAN 12345",
+  "notes": "Hello, Im generating this PDF",
+  "logoDataUrl": "",
+  "rate": 15,
+  "currency": "EUR",
+  "baseRateIsEur": false,
+  "invoicePrefix": "JPF-2026",
+  "irpfPercent": 7,
+  "vatPercent": 21,
+  "nextInvoiceCounter": 4
+}

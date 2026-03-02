@@ -66,77 +66,114 @@ function pickTotalsFromSummaryResponse(data) {
     return null;
 }
 
-// ----------------- Reports API -----------------
-async function fetchApprovedBillableByProject({ reportsUrl, workspaceId, userId, token, ym }) {
+// ----------------- Time Entries API (instead of Reports API) -----------------
+async function fetchBillableApprovedByProjectFromTimeEntries({ backendUrl, workspaceId, userId, token, ym }) {
     const { start, end } = monthRangeUTC(ym);
-    const url = `${reportsUrl.replace(/\/$/, "")}/v1/workspaces/${workspaceId}/reports/summary`;
 
-    const body = {
-        dateRangeStart: start,
-        dateRangeEnd: end,
-        users: { ids: [userId] },
-        billable: true,
-        approvalState: "APPROVED",
-        summaryFilter: { groups: ["PROJECT"] }, // ✅ key change
-    };
+    const base = String(backendUrl || "https://api.clockify.me/api").replace(/\/+$/, "");
+    const pageSize = 200;
 
-    const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Addon-Token": token },
-        body: JSON.stringify(body),
-    });
+    const all = [];
+    for (let page = 1; page <= 200; page++) { // hard safety cap
+        const qs = new URLSearchParams();
+        qs.set("start", start);
+        qs.set("end", end);
+        qs.set("hydrated", "true");
+        qs.set("in-progress", "false");
+        qs.set("page", String(page));
+        qs.set("page-size", String(pageSize));
 
-    if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Reports API failed ${res.status}: ${txt}`);
+        const url = `${base}/v1/workspaces/${workspaceId}/user/${userId}/time-entries?${qs.toString()}`;
+
+        const res = await fetch(url, {
+            method: "GET",
+            headers: { "X-Addon-Token": token },
+        });
+
+        if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(`Time Entries API failed ${res.status}: ${txt}`);
+        }
+
+        const batch = await res.json();
+        if (!Array.isArray(batch) || batch.length === 0) break;
+
+        all.push(...batch);
+        if (batch.length < pageSize) break;
     }
 
-    const data = await res.json();
+    // --- best-effort approval detection ---
+    const approvalsMode = all.some((t) =>
+        t?.approvalRequest ||
+        typeof t?.approvalStatus === "string" ||
+        typeof t?.approvalState === "string" ||
+        typeof t?.approval === "string" ||
+        t?.isLocked === true
+    );
 
-    const groups =
-        (Array.isArray(data?.groupOne) && data.groupOne) ||
-        (Array.isArray(data?.groupTwo) && data.groupTwo) ||
-        [];
+    const isApproved = (t) => {
+        const s =
+            t?.approvalRequest?.status ||
+            t?.approvalStatus ||
+            t?.approvalState ||
+            t?.approval;
 
-    // Normalize each row into { name, seconds }
-    const rows = groups
-        .map((g) => {
-            const seconds =
-                g.totalBillableTime ??
-                g.billableTime ??
-                g.totalTime ??
-                g.duration ??
-                0;
+        if (typeof s === "string") return s.toUpperCase() === "APPROVED";
 
-            const name =
-                g.name ??
-                g.projectName ??
-                g.project?.name ??
-                "Unknown project";
+        // If approvals mode exists but no explicit status, fall back to "locked"
+        if (approvalsMode) return t?.isLocked === true;
 
-            return { name: String(name), seconds: Number(seconds || 0) };
-        })
+        // If approvals aren't detectable, treat as approved to avoid "always empty"
+        return true;
+    };
+
+    const filtered = all
+        .filter((t) => t && t.timeInterval && t.timeInterval.start && t.timeInterval.end) // completed
+        .filter((t) => t.billable === true)
+        .filter((t) => isApproved(t));
+
+    // Group by project
+    const byProject = new Map(); // name -> seconds
+
+    for (const t of filtered) {
+        const durationSeconds =
+            Number(t?.timeInterval?.duration) ||
+            Math.max(
+                0,
+                (new Date(t.timeInterval.end).getTime() - new Date(t.timeInterval.start).getTime()) / 1000
+            );
+
+        if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) continue;
+
+        const name =
+            t?.project?.name ||
+            t?.projectName ||
+            (t?.projectId ? `Project ${t.projectId}` : "Professional services");
+
+        byProject.set(name, (byProject.get(name) || 0) + durationSeconds);
+    }
+
+    const rows = Array.from(byProject.entries())
+        .map(([name, seconds]) => ({ name: String(name), seconds: Number(seconds) }))
         .filter((r) => Number.isFinite(r.seconds) && r.seconds > 0);
 
-    // Fallback: if API returns no groups, try totals as a single “All projects” row
+    // fallback
     if (!rows.length) {
-        const totals = pickTotalsFromSummaryResponse(data);
-        const seconds =
-            totals?.totalBillableTime ??
-            totals?.billableTime ??
-            totals?.totalTime ??
-            totals?.duration ??
-            0;
+        const totalSeconds = filtered.reduce((s, t) => {
+            const dur = Number(t?.timeInterval?.duration) || 0;
+            return s + (Number.isFinite(dur) ? dur : 0);
+        }, 0);
 
         return {
-            rows: [
-                { name: "Professional services", seconds: Number(seconds || 0) }
-            ],
-            raw: data,
+            rows: [{ name: "Professional services", seconds: Number(totalSeconds || 0) }],
+            raw: { totalFetched: all.length, approvalsMode, filteredCount: filtered.length },
         };
     }
 
-    return { rows, raw: data };
+    return {
+        rows,
+        raw: { totalFetched: all.length, approvalsMode, filteredCount: filtered.length },
+    };
 }
 
 // ----------------- ECB FX (USD -> EUR) -----------------
@@ -287,10 +324,10 @@ module.exports.registerInvoicePdfEndpoint = function registerInvoicePdfEndpoint(
             const jwt = decodeJwtPayload(token);
             const workspaceId = jwt.workspaceId;
             userId = jwt.user || req.query.userId;
-            const reportsUrl = jwt.reportsUrl;
+            const backendUrl = jwt.backendUrl || "https://api.clockify.me/api";
 
-            if (!workspaceId || !userId || !reportsUrl) {
-                return res.status(400).send("Token missing workspaceId/user/reportsUrl");
+            if (!workspaceId || !userId || !backendUrl) {
+                return res.status(400).send("Token missing workspaceId/user/backendUrl");
             }
 
             // Load vendor profile
@@ -345,9 +382,13 @@ module.exports.registerInvoicePdfEndpoint = function registerInvoicePdfEndpoint(
             // ✅ safety clamp
             if (!Number.isFinite(rateToUse) || rateToUse < 0) rateToUse = 0;
 
-            // Fetch approved+billable PROJECT rows (do this BEFORE piping PDF)
-            const report = await fetchApprovedBillableByProject({ reportsUrl, workspaceId, userId, token, ym });
-
+            const report = await fetchBillableApprovedByProjectFromTimeEntries({
+                backendUrl,
+                workspaceId,
+                userId,
+                token,
+                ym,
+            });
             // ---- PDF headers ----
             res.setHeader("Content-Type", "application/pdf");
             res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoiceNumber}.pdf"`);
